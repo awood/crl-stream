@@ -83,6 +83,19 @@ public class X509CRLStream implements Closeable, Iterator<BigInteger> {
     private Integer revokedSeqBytesLeft;
 
     /**
+     * Construct a X509CRLStream.  <b>The underlying data in the stream parameter must
+     * be in DER format</b>.  PEM format will not work because we need to operate
+     * on the raw ASN1 of the DER.
+     *
+     * @param stream
+     * @throws IOException if we can't read the provided File
+     */
+    public X509CRLStream(InputStream stream) throws IOException {
+        crlStream = stream;
+        revokedSeqBytesLeft = discardHeader(crlStream);
+    }
+
+    /**
      * Construct a X509CRLStream.  <b>The crlFile parameter must be in DER format</b>.
      * PEM format will not work because we need to operate on the raw ASN1 of the DER.
      *
@@ -90,8 +103,7 @@ public class X509CRLStream implements Closeable, Iterator<BigInteger> {
      * @throws IOException if we can't read the provided File
      */
     public X509CRLStream(File crlFile) throws IOException {
-        crlStream = new BufferedInputStream(new FileInputStream(crlFile));
-        revokedSeqBytesLeft = discardHeader(crlStream);
+        this(new BufferedInputStream(new FileInputStream(crlFile)));
     }
 
     /**

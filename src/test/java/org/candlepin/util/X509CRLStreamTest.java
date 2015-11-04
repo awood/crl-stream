@@ -39,6 +39,7 @@ import java.math.BigInteger;
 import java.net.URL;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.cert.CertificateFactory;
 import java.security.cert.X509CRL;
 import java.security.cert.X509CRLEntry;
 import java.util.Date;
@@ -75,16 +76,13 @@ public class X509CRLStreamTest {
 
     @Test
     public void testIterateOverSerials() throws Exception {
-        X509CRLParser referenceParser = new X509CRLParser();
         InputStream referenceStream = new FileInputStream(crlFile);
-        referenceParser.engineInit(referenceStream);
-
-        X509CRLObject referenceCRL = (X509CRLObject) referenceParser.engineRead();
+        CertificateFactory cf = CertificateFactory.getInstance("X.509");
+        X509CRL referenceCrl = (X509CRL) cf.generateCRL(referenceStream);
 
         Set<BigInteger> referenceSerials = new HashSet<BigInteger>();
 
-        for (Object o : referenceCRL.getRevokedCertificates()) {
-            X509CRLEntry entry = (X509CRLEntry) o;
+        for (X509CRLEntry entry : referenceCrl.getRevokedCertificates()) {
             referenceSerials.add(entry.getSerialNumber());
         }
 
