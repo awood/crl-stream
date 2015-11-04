@@ -1,0 +1,44 @@
+# Introduction
+X509CRLStream is a class for rapidly reading an X509 certificate revocation list and pulling out the serial numbers from it.  Most CRL implementations read the entire list into memory which can be problematic for exceptionally large CRLs.
+
+X509CRLStream parses the underlying ASN1 of a CRL and descends to the certificate entries list.  From there it iterates over the list pulling out
+each entry's serial number.
+
+# Warnings
+X509CRLStream does not perform any signature checking on the CRL.  Therefore it
+is **wholly inappropriate** to use it for a CRL that you do not control yourself
+or otherwise trust implicity.
+
+X509CRLStream can only operate on DER encoded CRLs.  Re-encoding a PEM encoded CRL can be done with openssl:
+
+```
+openssl -in my_pem_crl.pem -inform pem -out my_der_crl.der -outform der
+```
+
+# Results
+The performance difference between X509CRLStream and CertificateFactory, the
+standard Java CRL parsing class, is dramatic in both memory usage and execution time.
+
+## Execution Time
+```
+Benchmark              Mode  Cnt     Score     Error  Units
+CRLBenchmark.inMemory  avgt   20  7493.602 ± 941.592  ms/op
+CRLBenchmark.stream    avgt   20   669.084 ±  91.382  ms/op
+```
+
+## Memory Use
+Metric         | Streaming | In Memory
+-------------- | --------- | ---------
+Full GC Pauses | 4         | 33
+GC Pauses      | 97        | 220
+Total Heap     | 1,599M    | 2,275M
+
+# Running the Benchmarks Yourself
+```
+$ mvn clean package
+$ java -jar target/benchmarks.jar
+```
+
+The JMH benchmarking toolkit creates the benchmarks.jar file and running it with
+the `-h` option will reveal a wealth of options on how many iterations to
+perform, how many warm-up iterations to run, etc.
