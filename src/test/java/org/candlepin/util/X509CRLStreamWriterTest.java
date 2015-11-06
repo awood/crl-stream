@@ -52,7 +52,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 
-public class X509CRLOutputStreamTest {
+public class X509CRLStreamWriterTest {
     private static final BouncyCastleProvider BC = new BouncyCastleProvider();
 
     @Rule
@@ -114,7 +114,7 @@ public class X509CRLOutputStreamTest {
         FileUtils.writeByteArrayToFile(crlToChange, crl.getEncoded());
 
         File outfile = new File(folder.getRoot(), "new.crl");
-        X509CRLOutputStream stream = new X509CRLOutputStream(crlToChange, (RSAPrivateKey) keyPair.getPrivate());
+        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate());
         stream.add(new BigInteger("9000"), new Date(), 0);
         stream.lock();
         OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));
@@ -158,10 +158,10 @@ public class X509CRLOutputStreamTest {
         thrown.expect(IllegalStateException.class);
         thrown.expectMessage(
             new MatchesPattern("Signing algorithm mismatch.*but expected " +
-                X509CRLOutputStream.DEFAULT_ALGORITHM_ID.getAlgorithm()
+                X509CRLStreamWriter.DEFAULT_ALGORITHM_ID.getAlgorithm()
             ));
 
-        X509CRLOutputStream stream = new X509CRLOutputStream(crlToChange, (RSAPrivateKey) keyPair.getPrivate());
+        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate());
         stream.add(new BigInteger("9000"), new Date(), 0);
         stream.lock();
         OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));
@@ -186,7 +186,7 @@ public class X509CRLOutputStreamTest {
         FileUtils.writeByteArrayToFile(crlToChange, crl.getEncoded());
 
         File outfile = new File(folder.getRoot(), "new.crl");
-        X509CRLOutputStream stream = new X509CRLOutputStream(crlToChange, (RSAPrivateKey) keyPair.getPrivate(), signingAlg);
+        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate(), signingAlg);
         stream.add(new BigInteger("9000"), new Date(), 0);
         stream.lock();
         OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));

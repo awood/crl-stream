@@ -63,7 +63,7 @@ import java.util.List;
 import java.util.Vector;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class X509CRLOutputStream {
+public class X509CRLStreamWriter {
     private boolean locked = false;
 
     private List<DERSequence> newEntries;
@@ -81,7 +81,7 @@ public class X509CRLOutputStream {
     public static final AlgorithmIdentifier DEFAULT_ALGORITHM_ID = new DefaultSignatureAlgorithmIdentifierFinder().find("SHA256withRSA");
     public static final AlgorithmIdentifier DEFAULT_DIGEST_ID = new DefaultDigestAlgorithmIdentifierFinder().find(DEFAULT_ALGORITHM_ID);
 
-    public X509CRLOutputStream(File crlToChange, RSAPrivateKey key, String algorithmName) throws FileNotFoundException, CryptoException {
+    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key, String algorithmName) throws FileNotFoundException, CryptoException {
         this.newEntries = new LinkedList<DERSequence>();
         this.crlIn = new BufferedInputStream(new FileInputStream(crlToChange));
         this.key = key;
@@ -127,7 +127,7 @@ public class X509CRLOutputStream {
         return dig;
     }
 
-    public X509CRLOutputStream(File crlToChange, RSAPrivateKey key) throws FileNotFoundException, CryptoException {
+    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key) throws FileNotFoundException, CryptoException {
         this(crlToChange, key, "SHA256withRSA");
     }
 
