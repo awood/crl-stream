@@ -16,6 +16,7 @@ package org.candlepin.util;
 
 import static org.junit.Assert.*;
 
+import org.apache.commons.codec.binary.Base64InputStream;
 import org.apache.commons.io.FileUtils;
 import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x509.CRLReason;
@@ -27,11 +28,13 @@ import org.bouncycastle.jce.provider.X509CRLObject;
 import org.bouncycastle.jce.provider.X509CRLParser;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
+import org.bouncycastle.util.io.Streams;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import java.io.BufferedInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
@@ -47,21 +50,27 @@ import java.util.HashSet;
 import java.util.Set;
 
 
-public class X509CRLStreamTest {
+public class X509CRLSerialStreamTest {
     private static final BouncyCastleProvider BC = new BouncyCastleProvider();
 
     @Rule
     public TemporaryFolder folder = new TemporaryFolder();
 
-    private File crlFile;
+    private File derFile;
+    private File pemFile;
+
     private X500Name issuer;
     private ContentSigner signer;
     private KeyPair keyPair;
 
     @Before
     public void setUp() throws Exception {
-        URL url = X509CRLStreamTest.class.getClassLoader().getResource("crl.der");
-        crlFile = new File(url.getFile());
+        URL url = X509CRLSerialStreamTest.class.getClassLoader().getResource("crl.der");
+        derFile = new File(url.getFile());
+
+        url = X509CRLSerialStreamTest.class.getClassLoader().getResource("crl.pem");
+        pemFile = new File(url.getFile());
+
         issuer = new X500Name("CN=Test Issuer");
 
         KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
@@ -76,7 +85,7 @@ public class X509CRLStreamTest {
 
     @Test
     public void testIterateOverSerials() throws Exception {
-        InputStream referenceStream = new FileInputStream(crlFile);
+        InputStream referenceStream = new FileInputStream(derFile);
         CertificateFactory cf = CertificateFactory.getInstance("X.509");
         X509CRL referenceCrl = (X509CRL) cf.generateCRL(referenceStream);
 
@@ -86,7 +95,7 @@ public class X509CRLStreamTest {
             referenceSerials.add(entry.getSerialNumber());
         }
 
-        X509CRLStream stream = new X509CRLStream(crlFile);
+        X509CRLSerialStream stream = new X509CRLSerialStream(derFile);
         try {
             Set<BigInteger> streamedSerials = new HashSet<BigInteger>();
             while (stream.hasNext()) {
@@ -110,7 +119,7 @@ public class X509CRLStreamTest {
         File noUpdateTimeCrl = new File(folder.getRoot(), "test.crl");
         FileUtils.writeByteArrayToFile(noUpdateTimeCrl, crl.getEncoded());
 
-        X509CRLStream stream = new X509CRLStream(noUpdateTimeCrl);
+        X509CRLSerialStream stream = new X509CRLSerialStream(noUpdateTimeCrl);
         try {
             Set<BigInteger> streamedSerials = new HashSet<BigInteger>();
             while (stream.hasNext()) {
@@ -119,6 +128,43 @@ public class X509CRLStreamTest {
 
             assertEquals(1, streamedSerials.size());
             assertTrue(streamedSerials.contains(new BigInteger("100")));
+        }
+        finally {
+            stream.close();
+        }
+    }
+
+    @Test
+    public void testPemReadThroughBase64Stream() throws Exception {
+        /* NB: Base64InputStream only takes base64.  The "-----BEGIN X509 CRL-----" and
+         * corresponding footer must be removed.  Luckily in Base64InputStream stops the
+         * minute it sees a padding character and our test file has some padding.  Thus,
+         * we don't need to worry about removing the footer.  If the Base64 file didn't
+         * require padding, I'm not sure what happens so the footer should be removed
+         * somehow for real uses */
+
+        InputStream referenceStream = new BufferedInputStream(new FileInputStream(pemFile));
+        byte[] header = "-----BEGIN X509 CRL-----".getBytes("ASCII");
+        Streams.readFully(referenceStream, header);
+
+        referenceStream = new Base64InputStream(referenceStream);
+        CertificateFactory cf = CertificateFactory.getInstance("X.509");
+        X509CRL referenceCrl = (X509CRL) cf.generateCRL(referenceStream);
+
+        Set<BigInteger> referenceSerials = new HashSet<BigInteger>();
+
+        for (X509CRLEntry entry : referenceCrl.getRevokedCertificates()) {
+            referenceSerials.add(entry.getSerialNumber());
+        }
+
+        X509CRLSerialStream stream = new X509CRLSerialStream(derFile);
+        try {
+            Set<BigInteger> streamedSerials = new HashSet<BigInteger>();
+            while (stream.hasNext()) {
+                streamedSerials.add(stream.next());
+            }
+
+            assertEquals(referenceSerials, streamedSerials);
         }
         finally {
             stream.close();

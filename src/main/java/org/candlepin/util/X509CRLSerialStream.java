@@ -78,19 +78,22 @@ import java.util.Iterator;
  * See https://en.wikipedia.org/wiki/X.690 and http://luca.ntop.org/Teaching/Appunti/asn1.html
  * for reference on ASN1 and DER encoding.
  */
-public class X509CRLStream implements Closeable, Iterator<BigInteger> {
+public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
     private InputStream crlStream;
+
+    // TODO should be a BigInteger?  Apparently long definite lengths can go up to 2^1008 - 1
     private Integer revokedSeqBytesLeft;
 
     /**
      * Construct a X509CRLStream.  <b>The underlying data in the stream parameter must
      * be in DER format</b>.  PEM format will not work because we need to operate
-     * on the raw ASN1 of the DER.
+     * on the raw ASN1 of the DER.  Use Apache Common's Base64InputStream with the X509
+     * header and footers stripped off if you need to use a PEM file.
      *
      * @param stream
      * @throws IOException if we can't read the provided File
      */
-    public X509CRLStream(InputStream stream) throws IOException {
+    public X509CRLSerialStream(InputStream stream) throws IOException {
         crlStream = stream;
         revokedSeqBytesLeft = discardHeader(crlStream);
     }
@@ -102,7 +105,7 @@ public class X509CRLStream implements Closeable, Iterator<BigInteger> {
      * @param crlFile
      * @throws IOException if we can't read the provided File
      */
-    public X509CRLStream(File crlFile) throws IOException {
+    public X509CRLSerialStream(File crlFile) throws IOException {
         this(new BufferedInputStream(new FileInputStream(crlFile)));
     }
 

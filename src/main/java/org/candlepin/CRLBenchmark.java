@@ -14,7 +14,7 @@
  */
 package org.candlepin;
 
-import org.candlepin.util.X509CRLStream;
+import org.candlepin.util.X509CRLSerialStream;
 
 import org.apache.commons.io.FileUtils;
 import org.bouncycastle.asn1.x500.X500Name;
@@ -67,11 +67,11 @@ public class CRLBenchmark {
     @Fork(value = 1,
         jvmArgsAppend = {"-Xloggc:gc_stream.log", "-verbose:gc", "-XX:+PrintGCDetails", "-XX:+PrintGCTimeStamps"})
     public void stream() {
-        X509CRLStream stream = null;
+        X509CRLSerialStream stream = null;
         try {
             List<BigInteger> l = new LinkedList<BigInteger>();
 
-            stream = new X509CRLStream(crlFile);
+            stream = new X509CRLSerialStream(crlFile);
             while (stream.hasNext()) {
                 l.add(stream.next());
             }
