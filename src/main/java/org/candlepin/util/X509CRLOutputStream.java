@@ -15,6 +15,7 @@
 package org.candlepin.util;
 
 import static org.bouncycastle.asn1.DERTags.*;
+import static org.candlepin.util.DERUtil.*;
 
 import org.apache.commons.io.IOUtils;
 import org.bouncycastle.asn1.ASN1EncodableVector;
@@ -46,10 +47,8 @@ import org.bouncycastle.crypto.params.RSAKeyParameters;
 import org.bouncycastle.crypto.signers.RSADigestSigner;
 import org.bouncycastle.operator.DefaultDigestAlgorithmIdentifierFinder;
 import org.bouncycastle.operator.DefaultSignatureAlgorithmIdentifierFinder;
-import org.bouncycastle.util.io.Streams;
 
 import java.io.BufferedInputStream;
-import java.io.EOFException;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -62,6 +61,7 @@ import java.util.Date;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Vector;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class X509CRLOutputStream {
     private boolean locked = false;
@@ -73,6 +73,7 @@ public class X509CRLOutputStream {
 
     private Digest hasher;
     private Integer originalLength;
+    private AtomicInteger count;
 
     private AlgorithmIdentifier signingAlg;
     private AlgorithmIdentifier digestAlg;
@@ -92,6 +93,7 @@ public class X509CRLOutputStream {
         this.digestAlg = new DefaultDigestAlgorithmIdentifierFinder().find(signingAlg);
 
         this.hasher = createDigest(digestAlg);
+        this.count = new AtomicInteger();
     }
 
     protected static Digest createDigest(AlgorithmIdentifier digAlg) throws CryptoException {
@@ -172,10 +174,10 @@ public class X509CRLOutputStream {
 
         originalLength = handleHeader(out);
 
-        while (originalLength > 0) {
-            echoTag(out);
-            int length = echoLength(out);
-            echoValue(out, length);
+        while (originalLength > count.get()) {
+            echoTag(out, count);
+            int length = echoLength(out, count);
+            echoValue(out, length, count);
         }
 
         // Read SignatureAlgorithm on old CRL and throw an exception if it doesn't
@@ -219,53 +221,43 @@ public class X509CRLOutputStream {
         }
     }
 
-    protected int rebuildTag(int tag, int tagNo) {
-        // FIXME this code is assuming a 1 byte tag
-        return tag;
+    protected int echoTag(OutputStream out) throws IOException {
+        return echoTag(out, null);
     }
 
-    protected int echoTag(OutputStream out) throws IOException {
-        int tag = readTag(crlIn);
-        int tagNo = readTagNumber(crlIn, tag);
+    protected int echoTag(OutputStream out, AtomicInteger i) throws IOException {
+        int tag = readTag(crlIn, i);
+        int tagNo = readTagNumber(crlIn, tag, i);
         out.write(rebuildTag(tag, tagNo));
         hasher.update(new Integer(tag).byteValue());
         return tagNo;
     }
 
     protected int echoLength(OutputStream out) throws IOException {
-        return inflateLength(out, 0);
+        return echoLength(out, null);
     }
 
-    protected int inflateLength(OutputStream out, int addedLength) throws IOException {
-        int length = readLength(crlIn) + addedLength;
+    protected int echoLength(OutputStream out, AtomicInteger i) throws IOException {
+        int length = readLength(crlIn, i);
         writeLength(out, length);
         hasher.update(new Integer(length).byteValue());
         return length;
     }
 
-    protected void writeLength(OutputStream out, int length) throws IOException {
-        if (length > 127) {
-            int size = 1;
-            int val = length;
-
-            while ((val >>>= 8) != 0) {
-                size++;
-            }
-
-            out.write((byte)(size | 0x80));
-
-            for (int i = (size - 1) * 8; i >= 0; i -= 8) {
-                out.write((byte)(length >> i));
-            }
-        }
-        else {
-            out.write((byte)length);
-        }
+    protected int inflateLength(OutputStream out, int addedLength) throws IOException {
+        int length = readLength(crlIn, null) + addedLength;
+        writeLength(out, length);
+        hasher.update(new Integer(length).byteValue());
+        return length;
     }
 
     private void echoValue(OutputStream out, int length) throws IOException {
+        echoValue(out, length, null);
+    }
+
+    private void echoValue(OutputStream out, int length, AtomicInteger i) throws IOException {
         byte[] item = new byte[length];
-        readFullyAndTrack(crlIn, item);
+        readFullyAndTrack(crlIn, item, i);
         out.write(item);
         hasher.update(item, 0, item.length);
     }
@@ -276,8 +268,8 @@ public class X509CRLOutputStream {
             newEntriesLength += s.getDEREncoded().length;
         }
 
-        int tag = readTag(crlIn);
-        int length = readLength(crlIn) + newEntriesLength;
+        int tag = readTag(crlIn, null);
+        int length = readLength(crlIn, null) + newEntriesLength;
 
         // NB: The top level sequence isn't part of the signature
         out.write(tag);
@@ -286,7 +278,8 @@ public class X509CRLOutputStream {
          * what we are using, this will not work since the signature lengths
          * could be/will be different.  If that is the case, we're doomed right here
          * because at this point we don't know the old signature type and signature length
-         * so we can't subtract those from the total length.
+         * so we can't determine how the total length of the top level sequence will
+         * be effected.
          */
         writeLength(out, length);
 
@@ -318,108 +311,5 @@ public class X509CRLOutputStream {
         int originalLength = length - newEntriesLength;
 
         return originalLength;
-    }
-
-    protected void readFullyAndTrack(InputStream s, byte[]  bytes) throws IOException {
-        if (Streams.readFully(s, bytes) != bytes.length) {
-            throw new EOFException("EOF encountered in middle of object");
-        }
-
-        if (originalLength != null) {
-            originalLength -= bytes.length;
-        }
-    }
-
-    /**
-     * Read a single byte and decrement the field holding the length of the
-     * revokedCertificates sequence accordingly.
-     *
-     * @param s the stream to read from
-     * @return an integer representing the byte read.
-     * @throws IOException
-     */
-    protected int readAndTrack(InputStream s) throws IOException {
-        int i = s.read();
-        if (originalLength != null) {
-            originalLength--;
-        }
-        return i;
-    }
-
-    protected int readTag(InputStream s) throws IOException {
-        int tag = readAndTrack(s);
-        if (tag <= 0) {
-            if (tag == 0) {
-                throw new IOException("unexpected end-of-contents marker");
-            }
-
-            throw new IOException("negative tag value");
-        }
-        return tag;
-    }
-
-    protected int readTagNumber(InputStream s, int tag) throws IOException {
-        int tagNo = tag & 0x1f;
-
-        // with tagged object tag number is bottom 5 bits, or stored at the start of the content
-        if (tagNo == 0x1f) {
-            // FIXME not supporting arbitrary tags is lousy.  RFC 5280 that a CRL doesn't use any non-universal tags,
-            // but it's not a general solution
-            throw new IllegalStateException("This class does not support tags that are not universal.");
-        }
-
-        return tagNo;
-    }
-
-    /**
-     * Read the length header from an input stream and return the length read.
-     *
-     * This code is a slightly adapted version of the code in BouncyCastle's
-     * ASN1InputStream.
-     *
-     * @param s
-     * @return
-     * @throws IOException
-     */
-    protected int readLength(InputStream s) throws IOException {
-        int length = readAndTrack(s);
-        if (length < 0) {
-            throw new EOFException("EOF found when length expected");
-        }
-
-        // indefinite-length encoding
-        if (length == 0x80) {
-            // We don't support this and the CRL spec shouldn't encounter any of these
-            // since indefinite length formats are forbidden in DER.
-            throw new IOException("Indefinite length encoding detected." +
-                "  Check that input is DER and not BER/CER.");
-            // return -1;
-        }
-
-        if (length > 127) {
-            int size = length & 0x7f;
-
-            // Note: The invalid long form "0xff" (see X.690 8.1.3.5c) will be caught here
-            if (size > 4) {
-                throw new IOException("DER length more than 4 bytes: " + size);
-            }
-
-            length = 0;
-            for (int i = 0; i < size; i++) {
-                int next = readAndTrack(s);
-
-                if (next < 0) {
-                    throw new EOFException("EOF found reading length");
-                }
-
-                length = (length << 8) + next;
-            }
-
-            if (length < 0) {
-                throw new IOException("corrupted stream - negative length found");
-            }
-        }
-
-        return length;
     }
 }

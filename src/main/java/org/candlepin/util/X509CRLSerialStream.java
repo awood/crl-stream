@@ -14,21 +14,22 @@
  */
 package org.candlepin.util;
 
+import static org.candlepin.util.DERUtil.*;
+
 import org.apache.commons.io.IOUtils;
 import org.bouncycastle.asn1.ASN1InputStream;
 import org.bouncycastle.asn1.ASN1Integer;
 import org.bouncycastle.asn1.DERTags;
-import org.bouncycastle.util.io.Streams;
 
 import java.io.BufferedInputStream;
 import java.io.Closeable;
-import java.io.EOFException;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigInteger;
 import java.util.Iterator;
+import java.util.concurrent.atomic.AtomicInteger;
 
 
 /**
@@ -82,7 +83,8 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
     private InputStream crlStream;
 
     // TODO should be a BigInteger?  Apparently long definite lengths can go up to 2^1008 - 1
-    private Integer revokedSeqBytesLeft;
+    private Integer revokedSeqBytes;
+    private AtomicInteger count;
 
     /**
      * Construct a X509CRLStream.  <b>The underlying data in the stream parameter must
@@ -95,7 +97,8 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
      */
     public X509CRLSerialStream(InputStream stream) throws IOException {
         crlStream = stream;
-        revokedSeqBytesLeft = discardHeader(crlStream);
+        revokedSeqBytes = discardHeader(crlStream);
+        count = new AtomicInteger();
     }
 
     /**
@@ -118,48 +121,48 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
      */
     protected int discardHeader(InputStream s) throws IOException {
         // Strip the tag and length of the CertificateList sequence
-        int tag = readTag(s);
-        readTagNumber(s, tag);
-        readLength(s);
+        int tag = readTag(s, count);
+        readTagNumber(s, tag, count);
+        readLength(s, count);
 
         // At this point we are at the tag for the TBSCertList sequence and we need to
         // strip off the tag and length
-        tag = readTag(s);
-        readTagNumber(s, tag);
-        readLength(s);
+        tag = readTag(s, count);
+        readTagNumber(s, tag, count);
+        readLength(s, count);
 
         // Now we are actually at the values within the TBSCertList sequence.
         // Read the CRL metadata and trash it.  We get to the thisUpdate item
         // and then break out.
         int tagNo = DERTags.NULL;
         while (true) {
-            tag = readTag(s);
-            tagNo = readTagNumber(s, tag);
-            int length = readLength(s);
+            tag = readTag(s, count);
+            tagNo = readTagNumber(s, tag, count);
+            int length = readLength(s, count);
             byte[] item = new byte[length];
-            readFullyAndTrack(s, item);
+            readFullyAndTrack(s, item, count);
 
             if (tagNo == DERTags.GENERALIZED_TIME || tagNo == DERTags.UTC_TIME) {
                 break;
             }
         }
 
-        tag = readTag(s);
-        tagNo = readTagNumber(s, tag);
+        tag = readTag(s, count);
+        tagNo = readTagNumber(s, tag, count);
 
         // The nextUpdate item is optional.  If it's there, we trash it.
         if (tagNo == DERTags.GENERALIZED_TIME || tagNo == DERTags.UTC_TIME) {
-            int length = readLength(s);
+            int length = readLength(s, count);
             byte[] item = new byte[length];
-            readFullyAndTrack(s, item);
-            tag = readTag(s);
-            tagNo = readTagNumber(s, tag);
+            readFullyAndTrack(s, item, count);
+            tag = readTag(s, count);
+            tagNo = readTagNumber(s, tag, count);
         }
 
         // Return the length of the revokedCertificates sequence.  We need to
         // track the bytes we read and read no more than this length to prevent
         // decoding errors.
-        return readLength(s);
+        return readLength(s, count);
     }
 
     public BigInteger next() {
@@ -167,13 +170,13 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
 
         try {
             // Strip the tag for the revokedCertificate entry
-            int tag = readTag(crlStream);
-            readTagNumber(crlStream, tag);
+            int tag = readTag(crlStream, count);
+            readTagNumber(crlStream, tag, count);
 
-            int entryLength = readLength(crlStream);
+            int entryLength = readLength(crlStream, count);
 
             byte[] entry = new byte[entryLength];
-            readFullyAndTrack(crlStream, entry);
+            readFullyAndTrack(crlStream, entry, count);
 
             /* If we need access to all the pieces of the revokedCertificate sequence
              * we would need to rebuilt the sequence since we've already stripped off
@@ -210,176 +213,11 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
     }
 
     public boolean hasNext() {
-        return revokedSeqBytesLeft > 0;
+        return revokedSeqBytes > count.get();
     }
 
     @Override
     public void close() throws IOException {
         crlStream.close();
-    }
-
-    /**
-     * Read exactly the number of bytes equal to the length of the bytes parameter and
-     * decrement the field holding the length of the revokedCertificate sequence accordingly.
-     *
-     * @param s the stream to read from
-     * @param bytes the byte array to fill
-     * @throws IOException if the stream cannot provide the number of required bytes
-     */
-    protected void readFullyAndTrack(InputStream s, byte[]  bytes) throws IOException {
-        if (Streams.readFully(s, bytes) != bytes.length) {
-            throw new EOFException("EOF encountered in middle of object");
-        }
-
-        if (revokedSeqBytesLeft != null) {
-            revokedSeqBytesLeft -= bytes.length;
-        }
-    }
-
-    /**
-     * Read a single byte and decrement the field holding the length of the
-     * revokedCertificates sequence accordingly.
-     *
-     * @param s the stream to read from
-     * @return an integer representing the byte read.
-     * @throws IOException
-     */
-    protected int readAndTrack(InputStream s) throws IOException {
-        int i = s.read();
-        if (revokedSeqBytesLeft != null) {
-            revokedSeqBytesLeft--;
-        }
-        return i;
-    }
-
-    /**
-     * The tag is the first byte of an ASN1 TLV group.  The tag specifies the
-     * data type.  A tag can span multiple bytes but we have to examine the first
-     * byte to determine if it does.
-     *
-     * This code is a slightly adapted version of the code in BouncyCastle's
-     * ASN1InputStream.
-     *
-     * @param s an InputStream to read
-     * @return an integer representing the first byte of the tag
-     * @throws IOException
-     */
-    protected int readTag(InputStream s) throws IOException {
-        int tag = readAndTrack(s);
-        if (tag <= 0) {
-            if (tag == 0)
-            {
-                throw new IOException("unexpected end-of-contents marker");
-            }
-
-            throw new IOException("negative tag value");
-        }
-        return tag;
-    }
-
-    /**
-     * Read the tag value out of the tag byte and/or consume extra bytes
-     * if the tag spans multiple octets.
-     *
-     * A tag is a single byte with the first 2 bits representing
-     * the tag class (Universal, Application, etc) and the third bit
-     * representing if the tag is primitive or constructed (meaning it
-     * holds other tags within it).  The last 5 bits determine the data
-     * type.  If the tag value is greater than 30, it won't fit in 5 bits
-     * and the value 0b11111 is reserved to indicate that.  The tag is then
-     * encoded in subsequent octets.
-     *
-     * See https://en.wikipedia.org/wiki/X.690#Identifier_octets
-     *
-     * This code is a slightly adapted version of the code in BouncyCastle's
-     * ASN1InputStream.
-     *
-     * @param s an InputStream to read
-     * @param tag the first byte of the tag
-     * @return an integer representing the entire tag value
-     * @throws IOException
-     */
-    protected int readTagNumber(InputStream s, int tag) throws IOException {
-        int tagNo = tag & 0x1f;
-
-        // with tagged object tag number is bottom 5 bits, or stored at the start of the content
-        if (tagNo == 0x1f) {
-            tagNo = 0;
-
-            int b = readAndTrack(s);
-
-            // X.690-0207 8.1.2.4.2
-            // "c) bits 7 to 1 of the first subsequent octet shall not all be zero."
-            // Note: -1 will pass
-            if ((b & 0x7f) == 0) {
-                throw new IOException("corrupted stream - invalid high tag number found");
-            }
-
-            while ((b >= 0) && ((b & 0x80) != 0)) {
-                tagNo |= (b & 0x7f);
-                tagNo <<= 7;
-                b = readAndTrack(s);
-            }
-
-            if (b < 0) {
-                throw new EOFException("EOF found inside tag value.");
-            }
-
-            tagNo |= (b & 0x7f);
-        }
-
-        return tagNo;
-    }
-
-    /**
-     * Read the length header from an input stream and return the length read.
-     *
-     * This code is a slightly adapted version of the code in BouncyCastle's
-     * ASN1InputStream.
-     *
-     * @param s
-     * @return
-     * @throws IOException
-     */
-    protected int readLength(InputStream s) throws IOException {
-        int length = readAndTrack(s);
-        if (length < 0) {
-            throw new EOFException("EOF found when length expected");
-        }
-
-        // indefinite-length encoding
-        if (length == 0x80) {
-            // We don't support this and the CRL spec shouldn't encounter any of these
-            // since indefinite length formats are forbidden in DER.
-            throw new IOException("Indefinite length encoding detected." +
-                "  Check that input is DER and not BER/CER.");
-            // return -1;
-        }
-
-        if (length > 127) {
-            int size = length & 0x7f;
-
-            // Note: The invalid long form "0xff" (see X.690 8.1.3.5c) will be caught here
-            if (size > 4) {
-                throw new IOException("DER length more than 4 bytes: " + size);
-            }
-
-            length = 0;
-            for (int i = 0; i < size; i++) {
-                int next = readAndTrack(s);
-
-                if (next < 0) {
-                    throw new EOFException("EOF found reading length");
-                }
-
-                length = (length << 8) + next;
-            }
-
-            if (length < 0) {
-                throw new IOException("corrupted stream - negative length found");
-            }
-        }
-
-        return length;
     }
 }
