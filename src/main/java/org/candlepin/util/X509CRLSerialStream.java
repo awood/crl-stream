@@ -74,6 +74,13 @@ import java.util.concurrent.atomic.AtomicInteger;
  * data begins with a tag defining the data type, has a series of bytes to
  * indicate the data length, and then the data itself.
  *
+ * <b>This class does not perform any signature checking</b>.  Checking the signature is
+ * theoretically possible but we would be unable to check it until after the list of
+ * entries had been exhausted (since each entry would have to be sent through the hasher).  At
+ * that point, the user already has all the serial numbers.  The best approach would perhaps
+ * be to check the signature in hasNext() once revokedSeqBytes hits zero and throw a
+ * RuntimeException.  We would also need a RSA public key as a parameter to the constructor.
+ *
  * See https://en.wikipedia.org/wiki/X.690 and http://luca.ntop.org/Teaching/Appunti/asn1.html
  * for reference on ASN1 and DER encoding.
  */

@@ -104,6 +104,13 @@ public class X509CRLStreamWriter {
         this.count = new AtomicInteger();
     }
 
+    /**
+     * Create an entry to be added to the CRL.
+     *
+     * @param serial
+     * @param date
+     * @param reason
+     */
     @SuppressWarnings({ "unchecked", "rawtypes" })
     public void add(BigInteger serial, Date date, int reason) {
         if (locked) {
@@ -132,6 +139,9 @@ public class X509CRLStreamWriter {
         newEntries.add(new DERSequence(v));
     }
 
+    /**
+     * Locks the stream to prepare it for writing.
+     */
     public synchronized void lock() {
         if (locked) {
             throw new IllegalStateException("This stream is already locked.");
@@ -140,6 +150,13 @@ public class X509CRLStreamWriter {
         locked = true;
     }
 
+    /**
+     * Write a modified CRL to the given output stream.  This method will add each entry provided
+     * via the add() method.
+     *
+     * @param out OutputStream to write to
+     * @throws IOException
+     */
     public void write(OutputStream out) throws IOException {
         if (!locked) {
             throw new IllegalStateException("The instance must be locked before writing.");
@@ -241,6 +258,9 @@ public class X509CRLStreamWriter {
         tagNo = readTagNumber(crlIn, tag, null);
 
         if (tagNo == DERTags.GENERALIZED_TIME || tagNo == DERTags.UTC_TIME) {
+            /* It would be possible to take in a desired nextUpdate in the constructor
+             * but I'm not sure if the added complexity is worth it.
+             */
             offsetNextUpdate(out, tagNo, oldThisUpdate);
             echoTag(out);
         }
@@ -254,6 +274,15 @@ public class X509CRLStreamWriter {
         return originalLength;
     }
 
+    /**
+     * Write a new nextUpdate time that is the same amount of time ahead of the new thisUpdate time as
+     * the old nextUpdate was from the old thisUpdate.
+     *
+     * @param out
+     * @param tagNo
+     * @param oldThisUpdate
+     * @throws IOException
+     */
     protected void offsetNextUpdate(OutputStream out, int tagNo, Date oldThisUpdate) throws IOException {
         int originalLength = readLength(crlIn, null);
         byte[] oldBytes = new byte[originalLength];
@@ -285,6 +314,14 @@ public class X509CRLStreamWriter {
         writeNewTime(out, newTime, originalLength);
     }
 
+    /**
+     * Replace a time in the ASN1 with the current time.
+     *
+     * @param out
+     * @param tagNo
+     * @return the time that was replaced
+     * @throws IOException
+     */
     protected Date readAndReplaceTime(OutputStream out, int tagNo) throws IOException {
         int originalLength = readLength(crlIn, null);
         byte[] oldBytes = new byte[originalLength];
