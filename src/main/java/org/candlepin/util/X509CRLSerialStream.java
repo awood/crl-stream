@@ -14,12 +14,10 @@
  */
 package org.candlepin.util;
 
+import static org.bouncycastle.asn1.DERTags.*;
 import static org.candlepin.util.DERUtil.*;
 
-import org.apache.commons.io.IOUtils;
-import org.bouncycastle.asn1.ASN1InputStream;
-import org.bouncycastle.asn1.ASN1Integer;
-import org.bouncycastle.asn1.DERTags;
+import org.bouncycastle.asn1.DERInteger;
 
 import java.io.BufferedInputStream;
 import java.io.Closeable;
@@ -134,7 +132,7 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
         // Now we are actually at the values within the TBSCertList sequence.
         // Read the CRL metadata and trash it.  We get to the thisUpdate item
         // and then break out.
-        int tagNo = DERTags.NULL;
+        int tagNo = NULL;
         while (true) {
             tag = readTag(s, count);
             tagNo = readTagNumber(s, tag, count);
@@ -142,7 +140,7 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
             byte[] item = new byte[length];
             readFullyAndTrack(s, item, count);
 
-            if (tagNo == DERTags.GENERALIZED_TIME || tagNo == DERTags.UTC_TIME) {
+            if (tagNo == GENERALIZED_TIME || tagNo == UTC_TIME) {
                 break;
             }
         }
@@ -151,7 +149,7 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
         tagNo = readTagNumber(s, tag, count);
 
         // The nextUpdate item is optional.  If it's there, we trash it.
-        if (tagNo == DERTags.GENERALIZED_TIME || tagNo == DERTags.UTC_TIME) {
+        if (tagNo == GENERALIZED_TIME || tagNo == UTC_TIME) {
             int length = readLength(s, count);
             byte[] item = new byte[length];
             readFullyAndTrack(s, item, count);
@@ -166,8 +164,6 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
     }
 
     public BigInteger next() {
-        ASN1InputStream asn1In = null;
-
         try {
             // Strip the tag for the revokedCertificate entry
             int tag = readTag(crlStream, count);
@@ -178,7 +174,7 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
             byte[] entry = new byte[entryLength];
             readFullyAndTrack(crlStream, entry, count);
 
-            /* If we need access to all the pieces of the revokedCertificate sequence
+            /* If we needed access to all the pieces of the revokedCertificate sequence
              * we would need to rebuilt the sequence since we've already stripped off
              * the tag and length.  The code to do so is below.
 
@@ -187,28 +183,18 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
              * reconstructed.write(0x30);
              * reconstructed.write(entryLength);
              * reconstructed.write(entry);
-             * ASN1InputStream asn1In = new ASN1InputStream(reconstructed.toByteArray());
-             * ASN1Sequence obj = (ASN1Sequence) asn1In.readObject();
-             * String s = ASN1Dump.dumpAsString(obj.getObjectAt(0));
-             * asn1In.close();
+             * DERSequence obj = (DERSequence) DERSequence.fromByteArray(reconstructed.toByteArray());
              */
 
             /* Right now we are only using the serial number which is first in
              * the revokedCertificate sequence.  So all we need to do is read the next
              * TLV.  All the extra stuff in the entry byte array will just be ignored.
              */
-            asn1In = new ASN1InputStream(entry);
-            ASN1Integer serial = (ASN1Integer) asn1In.readObject();
-
+            DERInteger serial = (DERInteger) DERInteger.fromByteArray(entry);
             return serial.getValue();
         }
         catch (IOException e) {
             throw new RuntimeException(e);
-        }
-        finally {
-            if (asn1In != null) {
-                IOUtils.closeQuietly(asn1In);
-            }
         }
     }
 
