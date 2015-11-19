@@ -68,6 +68,9 @@ import java.util.List;
 import java.util.Vector;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Class for adding entries to an X509 in a memory-efficient manner.
+ */
 public class X509CRLStreamWriter {
     public static final String DEFAULT_ALGORITHM = "SHA256withRSA";
 
@@ -85,11 +88,13 @@ public class X509CRLStreamWriter {
     private AlgorithmIdentifier signingAlg;
     private AlgorithmIdentifier digestAlg;
 
-    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key) throws FileNotFoundException, CryptoException {
+    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key)
+        throws FileNotFoundException, CryptoException {
         this(crlToChange, key, DEFAULT_ALGORITHM);
     }
 
-    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key, String algorithmName) throws FileNotFoundException, CryptoException {
+    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key, String algorithmName)
+        throws FileNotFoundException, CryptoException {
         this.newEntries = new LinkedList<DERSequence>();
         this.crlIn = new BufferedInputStream(new FileInputStream(crlToChange));
         this.key = key;
@@ -155,7 +160,7 @@ public class X509CRLStreamWriter {
      * via the add() method.
      *
      * @param out OutputStream to write to
-     * @throws IOException
+     * @throws IOException if something goes wrong
      */
     public void write(OutputStream out) throws IOException {
         if (!locked) {
@@ -181,9 +186,11 @@ public class X509CRLStreamWriter {
             if (!referenceAlgId.equals(signingAlg)) {
                 throw new IllegalStateException(
                     "Signing algorithm mismatch.  This will result in an encoding error!  " +
-                        "Got " + referenceAlgId.getAlgorithm() + " but expected " + signingAlg.getAlgorithm());
+                        "Got " + referenceAlgId.getAlgorithm() + " but expected " +
+                        signingAlg.getAlgorithm());
             }
-        } finally {
+        }
+        finally {
             IOUtils.closeQuietly(asn1In);
         }
 
@@ -246,7 +253,8 @@ public class X509CRLStreamWriter {
             if (tagNo == GENERALIZED_TIME || tagNo == UTC_TIME) {
                 oldThisUpdate = readAndReplaceTime(out, tagNo);
                 break;
-            } else {
+            }
+            else {
                 out.write(rebuildTag(tag, tagNo));
                 length = echoLength(out);
                 echoValue(out, length);

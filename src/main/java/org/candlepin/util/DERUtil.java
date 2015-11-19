@@ -14,8 +14,6 @@
  */
 package org.candlepin.util;
 
-import static org.bouncycastle.asn1.DERTags.*;
-
 import org.bouncycastle.util.io.Streams;
 
 import java.io.EOFException;
@@ -24,8 +22,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Collection of utilities for working on DER encoded ASN1.
+ */
 public class DERUtil {
-
     private DERUtil() {
         // No instances allowed
     }
@@ -39,7 +39,8 @@ public class DERUtil {
      * @param count the counter to modify.  Can be null.
      * @throws IOException if the stream cannot provide the number of required bytes
      */
-    public static void readFullyAndTrack(InputStream s, byte[] bytes, AtomicInteger count) throws IOException {
+    public static void readFullyAndTrack(InputStream s, byte[] bytes,
+        AtomicInteger count) throws IOException {
         if (Streams.readFully(s, bytes) != bytes.length) {
             throw new EOFException("EOF encountered in middle of object");
         }
@@ -55,11 +56,11 @@ public class DERUtil {
      * @param s the stream to read from
      * @param count the counter to increment.  Can be null.
      * @return an integer representing the byte read.
-     * @throws IOException
+     * @throws IOException if something goes wrong
      */
     public static int readAndTrack(InputStream s, AtomicInteger count) throws IOException {
         int i = s.read();
-        if ( count != null) {
+        if (count != null) {
             count.incrementAndGet();
         }
         return i;
@@ -76,7 +77,7 @@ public class DERUtil {
      * @param s an InputStream to read
      * @param count the counter to modify.  Can be null.
      * @return an integer representing the first byte of the tag
-     * @throws IOException
+     * @throws IOException if something goes wrong
      */
     public static int readTag(InputStream s, AtomicInteger count) throws IOException {
         int tag = readAndTrack(s, count);
@@ -113,7 +114,7 @@ public class DERUtil {
      * @param tag the first byte of the tag
      * @param count the counter to modify.  Can be null.
      * @return an integer representing the entire tag value
-     * @throws IOException
+     * @throws IOException if something goes wrong
      */
     public static int readTagNumber(InputStream s, int tag, AtomicInteger count) throws IOException {
         int tagNo = tag & 0x1f;
@@ -155,8 +156,8 @@ public class DERUtil {
      *
      * @param s the InputStream to read from
      * @param count the counter to modify.  Can be null.
-     * @return
-     * @throws IOException
+     * @return then length of the value
+     * @throws IOException if something goes wrong
      */
     public static int readLength(InputStream s, AtomicInteger count) throws IOException {
         int length = readAndTrack(s, count);
@@ -205,7 +206,7 @@ public class DERUtil {
      *
      * @param out
      * @param length
-     * @throws IOException
+     * @throws IOException if something goes wrong
      */
     public static void writeLength(OutputStream out, int length) throws IOException {
         if (length > 127) {
@@ -216,14 +217,14 @@ public class DERUtil {
                 size++;
             }
 
-            out.write((byte)(size | 0x80));
+            out.write((byte) (size | 0x80));
 
             for (int i = (size - 1) * 8; i >= 0; i -= 8) {
-                out.write((byte)(length >> i));
+                out.write((byte) (length >> i));
             }
         }
         else {
-            out.write((byte)length);
+            out.write((byte) length);
         }
     }
 
