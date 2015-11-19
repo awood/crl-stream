@@ -14,6 +14,8 @@
  */
 package org.candlepin.util;
 
+import static org.bouncycastle.asn1.DERTags.*;
+
 import org.bouncycastle.util.io.Streams;
 
 import java.io.EOFException;
@@ -226,7 +228,11 @@ public class DERUtil {
     }
 
     public static int rebuildTag(int tag, int tagNo) {
-        // FIXME this code is assuming a 1 byte tag
+        // Universal tags have zeroes as the first two bits.
+        if ((tag >>> 6) != 0) {
+            throw new RuntimeException("This class only supports universal ASN1 tags.");
+        }
+
         return tag;
     }
 }
