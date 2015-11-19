@@ -104,37 +104,6 @@ public class X509CRLStreamWriter {
         this.count = new AtomicInteger();
     }
 
-    protected static Digest createDigest(AlgorithmIdentifier digAlg) throws CryptoException {
-        Digest dig;
-
-        if (digAlg.getAlgorithm().equals(OIWObjectIdentifiers.idSHA1)) {
-            dig = new SHA1Digest();
-        }
-        else if (digAlg.getAlgorithm().equals(NISTObjectIdentifiers.id_sha224)) {
-            dig = new SHA224Digest();
-        }
-        else if (digAlg.getAlgorithm().equals(NISTObjectIdentifiers.id_sha256)) {
-            dig = new SHA256Digest();
-        }
-        else if (digAlg.getAlgorithm().equals(NISTObjectIdentifiers.id_sha384)) {
-            dig = new SHA384Digest();
-        }
-        else if (digAlg.getAlgorithm().equals(NISTObjectIdentifiers.id_sha512)) {
-            dig = new SHA384Digest();
-        }
-        else if (digAlg.getAlgorithm().equals(PKCSObjectIdentifiers.md5)) {
-            dig = new MD5Digest();
-        }
-        else if (digAlg.getAlgorithm().equals(PKCSObjectIdentifiers.md4)) {
-            dig = new MD4Digest();
-        }
-        else {
-            throw new CryptoException("cannot recognise digest");
-        }
-
-        return dig;
-    }
-
     @SuppressWarnings({ "unchecked", "rawtypes" })
     public void add(BigInteger serial, Date date, int reason) {
         if (locked) {
@@ -184,8 +153,8 @@ public class X509CRLStreamWriter {
             echoValue(out, length, count);
         }
 
-        // Read SignatureAlgorithm on old CRL and throw an exception if it doesn't
-        // match expectations.
+        /* Read SignatureAlgorithm on old CRL and throw an exception if it doesn't
+         * match expectations. */
         ASN1InputStream asn1In = null;
         try {
             asn1In = new ASN1InputStream(crlIn);
@@ -223,47 +192,6 @@ public class X509CRLStreamWriter {
         catch (CryptoException e) {
             throw new IOException("Could not sign", e);
         }
-    }
-
-    protected int echoTag(OutputStream out) throws IOException {
-        return echoTag(out, null);
-    }
-
-    protected int echoTag(OutputStream out, AtomicInteger i) throws IOException {
-        int tag = readTag(crlIn, i);
-        int tagNo = readTagNumber(crlIn, tag, i);
-        out.write(rebuildTag(tag, tagNo));
-        hasher.update(new Integer(tag).byteValue());
-        return tagNo;
-    }
-
-    protected int echoLength(OutputStream out) throws IOException {
-        return echoLength(out, null);
-    }
-
-    protected int echoLength(OutputStream out, AtomicInteger i) throws IOException {
-        int length = readLength(crlIn, i);
-        writeLength(out, length);
-        hasher.update(new Integer(length).byteValue());
-        return length;
-    }
-
-    protected int inflateLength(OutputStream out, int addedLength) throws IOException {
-        int length = readLength(crlIn, null) + addedLength;
-        writeLength(out, length);
-        hasher.update(new Integer(length).byteValue());
-        return length;
-    }
-
-    protected void echoValue(OutputStream out, int length) throws IOException {
-        echoValue(out, length, null);
-    }
-
-    protected void echoValue(OutputStream out, int length, AtomicInteger i) throws IOException {
-        byte[] item = new byte[length];
-        readFullyAndTrack(crlIn, item, i);
-        out.write(item);
-        hasher.update(item, 0, item.length);
     }
 
     protected int handleHeader(OutputStream out) throws IOException {
@@ -341,8 +269,8 @@ public class X509CRLStreamWriter {
             oldTime = DERGeneralizedTime.getInstance(t, false);
         }
 
-        // Determine the time between the old thisUpdate and old nextUpdate and add it
-        // to the new nextUpdate.
+        /* Determine the time between the old thisUpdate and old nextUpdate and add it
+        /* to the new nextUpdate. */
         Date oldNextUpdate = new Time(oldTime).getDate();
         long delta = oldNextUpdate.getTime() - oldThisUpdate.getTime();
         Date newNextUpdate = new Date(new Date().getTime() + delta);
@@ -391,8 +319,7 @@ public class X509CRLStreamWriter {
 
         /* If the length changes, it's going to create a discrepancy with the length
          * reported in the TBSCertList sequence.  The length could change with the addition
-         * or removal of time zone information for example.
-         */
+         * or removal of time zone information for example. */
         if (newLength != originalLength) {
             throw new IllegalStateException("Length of generated time does not match the original length." +
                 "  Corruption would result.");
@@ -400,5 +327,77 @@ public class X509CRLStreamWriter {
 
         out.write(newEncodedTime);
         hasher.update(newEncodedTime, 0, newEncodedTime.length);
+    }
+
+    protected int echoTag(OutputStream out) throws IOException {
+        return echoTag(out, null);
+    }
+
+    protected int echoTag(OutputStream out, AtomicInteger i) throws IOException {
+        int tag = readTag(crlIn, i);
+        int tagNo = readTagNumber(crlIn, tag, i);
+        out.write(rebuildTag(tag, tagNo));
+        hasher.update(new Integer(tag).byteValue());
+        return tagNo;
+    }
+
+    protected int echoLength(OutputStream out) throws IOException {
+        return echoLength(out, null);
+    }
+
+    protected int echoLength(OutputStream out, AtomicInteger i) throws IOException {
+        int length = readLength(crlIn, i);
+        writeLength(out, length);
+        hasher.update(new Integer(length).byteValue());
+        return length;
+    }
+
+    protected int inflateLength(OutputStream out, int addedLength) throws IOException {
+        int length = readLength(crlIn, null) + addedLength;
+        writeLength(out, length);
+        hasher.update(new Integer(length).byteValue());
+        return length;
+    }
+
+    protected void echoValue(OutputStream out, int length) throws IOException {
+        echoValue(out, length, null);
+    }
+
+    protected void echoValue(OutputStream out, int length, AtomicInteger i) throws IOException {
+        byte[] item = new byte[length];
+        readFullyAndTrack(crlIn, item, i);
+        out.write(item);
+        hasher.update(item, 0, item.length);
+    }
+
+    protected static Digest createDigest(AlgorithmIdentifier digAlg) throws CryptoException {
+        Digest dig;
+
+        if (digAlg.getAlgorithm().equals(OIWObjectIdentifiers.idSHA1)) {
+            dig = new SHA1Digest();
+        }
+        else if (digAlg.getAlgorithm().equals(NISTObjectIdentifiers.id_sha224)) {
+            dig = new SHA224Digest();
+        }
+        else if (digAlg.getAlgorithm().equals(NISTObjectIdentifiers.id_sha256)) {
+            dig = new SHA256Digest();
+        }
+        else if (digAlg.getAlgorithm().equals(NISTObjectIdentifiers.id_sha384)) {
+            dig = new SHA384Digest();
+        }
+        else if (digAlg.getAlgorithm().equals(NISTObjectIdentifiers.id_sha512)) {
+            dig = new SHA384Digest();
+        }
+        else if (digAlg.getAlgorithm().equals(PKCSObjectIdentifiers.md5)) {
+            dig = new MD5Digest();
+        }
+        else if (digAlg.getAlgorithm().equals(PKCSObjectIdentifiers.md4)) {
+            dig = new MD4Digest();
+        }
+        else {
+            throw new CryptoException("Cannot recognize digest.");
+        }
+
+        return dig;
     }
 }
