@@ -14,7 +14,7 @@
  */
 package org.candlepin.util;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.*;
 
 import org.apache.commons.io.FileUtils;
 import org.bouncycastle.asn1.x500.X500Name;
@@ -47,6 +47,7 @@ import java.security.cert.CertificateFactory;
 import java.security.cert.X509CRL;
 import java.security.cert.X509CRLEntry;
 import java.security.interfaces.RSAPrivateKey;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.Set;
@@ -139,6 +140,64 @@ public class X509CRLStreamWriterTest {
     }
 
     @Test
+    public void testModifyUpdatedTime() throws Exception {
+        X509v2CRLBuilder crlBuilder = new X509v2CRLBuilder(issuer, new Date());
+        crlBuilder.addCRLEntry(new BigInteger("100"), new Date(), CRLReason.unspecified);
+        X509CRLHolder holder = crlBuilder.build(signer);
+        X509CRL crl = new JcaX509CRLConverter().setProvider(BC).getCRL(holder);
+
+        File crlToChange = new File(folder.getRoot(), "test.crl");
+        FileUtils.writeByteArrayToFile(crlToChange, crl.getEncoded());
+
+        Thread.sleep(1000);
+
+        File outfile = new File(folder.getRoot(), "new.crl");
+        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate());
+        stream.lock();
+        OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));
+        stream.write(o);
+        o.close();
+
+        InputStream changedStream = new BufferedInputStream(new FileInputStream(outfile));
+        CertificateFactory cf = CertificateFactory.getInstance("X.509");
+        X509CRL changedCrl = (X509CRL) cf.generateCRL(changedStream);
+
+        assertTrue("Error: CRL thisUpdate field unmodified", crl.getThisUpdate().before(changedCrl.getThisUpdate()));
+    }
+
+    @Test
+    public void testModifyNextUpdateTime() throws Exception {
+        X509v2CRLBuilder crlBuilder = new X509v2CRLBuilder(issuer, new Date());
+        crlBuilder.addCRLEntry(new BigInteger("100"), new Date(), CRLReason.unspecified);
+
+        Calendar c = Calendar.getInstance();
+        c.add(Calendar.DATE, 1);
+        Date nextUpdate = c.getTime();
+
+        crlBuilder.setNextUpdate(nextUpdate);
+        X509CRLHolder holder = crlBuilder.build(signer);
+        X509CRL crl = new JcaX509CRLConverter().setProvider(BC).getCRL(holder);
+
+        File crlToChange = new File(folder.getRoot(), "test.crl");
+        FileUtils.writeByteArrayToFile(crlToChange, crl.getEncoded());
+
+        Thread.sleep(1000);
+
+        File outfile = new File(folder.getRoot(), "new.crl");
+        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate());
+        stream.lock();
+        OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));
+        stream.write(o);
+        o.close();
+
+        InputStream changedStream = new BufferedInputStream(new FileInputStream(outfile));
+        CertificateFactory cf = CertificateFactory.getInstance("X.509");
+        X509CRL changedCrl = (X509CRL) cf.generateCRL(changedStream);
+
+        assertTrue("Error: CRL nextUpdate field unmodified", crl.getNextUpdate().before(changedCrl.getNextUpdate()));
+    }
+
+    @Test
     public void testSignatureMismatch() throws Exception {
         X509v2CRLBuilder crlBuilder = new X509v2CRLBuilder(issuer, new Date());
         crlBuilder.addCRLEntry(new BigInteger("100"), new Date(), CRLReason.unspecified);
@@ -157,9 +216,7 @@ public class X509CRLStreamWriterTest {
 
         thrown.expect(IllegalStateException.class);
         thrown.expectMessage(
-            new MatchesPattern("Signing algorithm mismatch.*but expected " +
-                X509CRLStreamWriter.DEFAULT_ALGORITHM_ID.getAlgorithm()
-            ));
+            new MatchesPattern("Signing algorithm mismatch.*"));
 
         X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate());
         stream.add(new BigInteger("9000"), new Date(), 0);

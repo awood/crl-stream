@@ -22,10 +22,14 @@ import org.bouncycastle.asn1.ASN1EncodableVector;
 import org.bouncycastle.asn1.ASN1InputStream;
 import org.bouncycastle.asn1.ASN1Sequence;
 import org.bouncycastle.asn1.DERBitString;
+import org.bouncycastle.asn1.DERGeneralizedTime;
 import org.bouncycastle.asn1.DERInteger;
+import org.bouncycastle.asn1.DERObject;
 import org.bouncycastle.asn1.DEROctetString;
 import org.bouncycastle.asn1.DERSequence;
+import org.bouncycastle.asn1.DERTaggedObject;
 import org.bouncycastle.asn1.DERTags;
+import org.bouncycastle.asn1.DERUTCTime;
 import org.bouncycastle.asn1.nist.NISTObjectIdentifiers;
 import org.bouncycastle.asn1.oiw.OIWObjectIdentifiers;
 import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
@@ -49,6 +53,7 @@ import org.bouncycastle.operator.DefaultDigestAlgorithmIdentifierFinder;
 import org.bouncycastle.operator.DefaultSignatureAlgorithmIdentifierFinder;
 
 import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -64,6 +69,8 @@ import java.util.Vector;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class X509CRLStreamWriter {
+    public static final String DEFAULT_ALGORITHM = "SHA256withRSA";
+
     private boolean locked = false;
 
     private List<DERSequence> newEntries;
@@ -78,8 +85,9 @@ public class X509CRLStreamWriter {
     private AlgorithmIdentifier signingAlg;
     private AlgorithmIdentifier digestAlg;
 
-    public static final AlgorithmIdentifier DEFAULT_ALGORITHM_ID = new DefaultSignatureAlgorithmIdentifierFinder().find("SHA256withRSA");
-    public static final AlgorithmIdentifier DEFAULT_DIGEST_ID = new DefaultDigestAlgorithmIdentifierFinder().find(DEFAULT_ALGORITHM_ID);
+    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key) throws FileNotFoundException, CryptoException {
+        this(crlToChange, key, DEFAULT_ALGORITHM);
+    }
 
     public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key, String algorithmName) throws FileNotFoundException, CryptoException {
         this.newEntries = new LinkedList<DERSequence>();
@@ -125,10 +133,6 @@ public class X509CRLStreamWriter {
         }
 
         return dig;
-    }
-
-    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key) throws FileNotFoundException, CryptoException {
-        this(crlToChange, key, "SHA256withRSA");
     }
 
     @SuppressWarnings({ "unchecked", "rawtypes" })
@@ -251,18 +255,18 @@ public class X509CRLStreamWriter {
         return length;
     }
 
-    private void echoValue(OutputStream out, int length) throws IOException {
+    protected void echoValue(OutputStream out, int length) throws IOException {
         echoValue(out, length, null);
     }
 
-    private void echoValue(OutputStream out, int length, AtomicInteger i) throws IOException {
+    protected void echoValue(OutputStream out, int length, AtomicInteger i) throws IOException {
         byte[] item = new byte[length];
         readFullyAndTrack(crlIn, item, i);
         out.write(item);
         hasher.update(item, 0, item.length);
     }
 
-    private int handleHeader(OutputStream out) throws IOException {
+    protected int handleHeader(OutputStream out) throws IOException {
         int newEntriesLength = 0;
         for (DERSequence s : newEntries) {
             newEntriesLength += s.getDEREncoded().length;
@@ -274,12 +278,13 @@ public class X509CRLStreamWriter {
         // NB: The top level sequence isn't part of the signature
         out.write(tag);
 
-        /* XXX If the algorithm signature on the original CRL doesn't match
-         * what we are using, this will not work since the signature lengths
-         * could be/will be different.  If that is the case, we're doomed right here
-         * because at this point we don't know the old signature type and signature length
-         * so we can't determine how the total length of the top level sequence will
-         * be effected.
+        /* If the algorithm signature on the original CRL doesn't match what
+         * we are using, this will not work since the signature lengths could
+         * be/will be different.  If that is the case, we're doomed right here
+         * because at this point we don't know the old signature type and signature
+         * length so we can't determine how the total length of the top level sequence
+         * will be affected.  We'll report the error when we detect the discrepancy
+         * in algorithms later.
          */
         writeLength(out, length);
 
@@ -288,28 +293,112 @@ public class X509CRLStreamWriter {
         inflateLength(out, newEntriesLength);
 
         int tagNo = DERTags.NULL;
+        Date oldThisUpdate = null;
         while (true) {
-            tagNo = echoTag(out);
-            length = echoLength(out);
-            echoValue(out, length);
+            tag = readTag(crlIn, null);
+            tagNo = readTagNumber(crlIn, tag, null);
 
             if (tagNo == GENERALIZED_TIME || tagNo == UTC_TIME) {
+                oldThisUpdate = readAndReplaceTime(out, tagNo);
                 break;
+            } else {
+                out.write(rebuildTag(tag, tagNo));
+                length = echoLength(out);
+                echoValue(out, length);
             }
         }
 
         // Now we have to deal with the potential for an optional nextUpdate field
-        tagNo = echoTag(out);
+        tag = readTag(crlIn, null);
+        tagNo = readTagNumber(crlIn, tag, null);
 
         if (tagNo == DERTags.GENERALIZED_TIME || tagNo == DERTags.UTC_TIME) {
-            length = echoLength(out);
-            echoValue(out, length);
+            offsetNextUpdate(out, tagNo, oldThisUpdate);
             echoTag(out);
+        }
+        else {
+            out.write(rebuildTag(tag, tagNo));
         }
 
         length = inflateLength(out, newEntriesLength);
         int originalLength = length - newEntriesLength;
 
         return originalLength;
+    }
+
+    protected void offsetNextUpdate(OutputStream out, int tagNo, Date oldThisUpdate) throws IOException {
+        int originalLength = readLength(crlIn, null);
+        byte[] oldBytes = new byte[originalLength];
+        readFullyAndTrack(crlIn, oldBytes, null);
+
+        DERObject oldTime = null;
+        if (tagNo == UTC_TIME) {
+            DERTaggedObject t = new DERTaggedObject(UTC_TIME, new DEROctetString(oldBytes));
+            oldTime = DERUTCTime.getInstance(t, false);
+        }
+        else {
+            DERTaggedObject t = new DERTaggedObject(GENERALIZED_TIME, new DEROctetString(oldBytes));
+            oldTime = DERGeneralizedTime.getInstance(t, false);
+        }
+
+        // Determine the time between the old thisUpdate and old nextUpdate and add it
+        // to the new nextUpdate.
+        Date oldNextUpdate = new Time(oldTime).getDate();
+        long delta = oldNextUpdate.getTime() - oldThisUpdate.getTime();
+        Date newNextUpdate = new Date(new Date().getTime() + delta);
+
+        DERObject newTime = null;
+        if (tagNo == UTC_TIME) {
+            newTime = new DERUTCTime(newNextUpdate);
+        }
+        else {
+            newTime = new DERGeneralizedTime(newNextUpdate);
+        }
+        writeNewTime(out, newTime, originalLength);
+    }
+
+    protected Date readAndReplaceTime(OutputStream out, int tagNo) throws IOException {
+        int originalLength = readLength(crlIn, null);
+        byte[] oldBytes = new byte[originalLength];
+        readFullyAndTrack(crlIn, oldBytes, null);
+
+        DERObject oldTime = null;
+        DERObject newTime = null;
+        if (tagNo == UTC_TIME) {
+            DERTaggedObject t = new DERTaggedObject(UTC_TIME, new DEROctetString(oldBytes));
+            oldTime = DERUTCTime.getInstance(t, false);
+
+            newTime = new DERUTCTime(new Date());
+        }
+        else {
+            DERTaggedObject t = new DERTaggedObject(GENERALIZED_TIME, new DEROctetString(oldBytes));
+            oldTime = DERGeneralizedTime.getInstance(t, false);
+
+            newTime = new DERGeneralizedTime(new Date());
+        }
+
+        writeNewTime(out, newTime, originalLength);
+        return new Time(oldTime).getDate();
+    }
+
+    protected void writeNewTime(OutputStream out, DERObject newTime, int originalLength) throws IOException {
+        byte[] newEncodedTime = newTime.getDEREncoded();
+
+        InputStream timeIn = new ByteArrayInputStream(newEncodedTime);
+        int newTag = readTag(timeIn, null);
+        readTagNumber(timeIn, newTag, null);
+        int newLength = readLength(timeIn, null);
+
+        /* If the length changes, it's going to create a discrepancy with the length
+         * reported in the TBSCertList sequence.  The length could change with the addition
+         * or removal of time zone information for example.
+         */
+        if (newLength != originalLength) {
+            throw new IllegalStateException("Length of generated time does not match the original length." +
+                "  Corruption would result.");
+        }
+
+        out.write(newEncodedTime);
+        hasher.update(newEncodedTime, 0, newEncodedTime.length);
     }
 }
