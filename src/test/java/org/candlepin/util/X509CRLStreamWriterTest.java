@@ -23,6 +23,7 @@ import org.bouncycastle.cert.X509CRLHolder;
 import org.bouncycastle.cert.X509v2CRLBuilder;
 import org.bouncycastle.cert.jcajce.JcaX509CRLConverter;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.jce.provider.X509CRLEntryObject;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
 import org.hamcrest.Description;
@@ -140,6 +141,51 @@ public class X509CRLStreamWriterTest {
     }
 
     @Test
+    public void testDeleteEntryFromCRL() throws Exception {
+        X509v2CRLBuilder crlBuilder = new X509v2CRLBuilder(issuer, new Date());
+        crlBuilder.addCRLEntry(new BigInteger("100"), new Date(), CRLReason.unspecified);
+        crlBuilder.addCRLEntry(new BigInteger("101"), new Date(), CRLReason.unspecified);
+        X509CRLHolder holder = crlBuilder.build(signer);
+        X509CRL crl = new JcaX509CRLConverter().setProvider(BC).getCRL(holder);
+
+        File crlToChange = new File(folder.getRoot(), "test.crl");
+        FileUtils.writeByteArrayToFile(crlToChange, crl.getEncoded());
+
+        File outfile = new File(folder.getRoot(), "new.crl");
+
+        CRLEntryValidator validator = new CRLEntryValidator() {
+            @Override
+            public boolean shouldKeep(X509CRLEntryObject entry) {
+                return entry.getSerialNumber().equals(new BigInteger("100"));
+            }
+        };
+
+        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate(), validator);
+        stream.add(new BigInteger("9000"), new Date(), 0);
+        stream.lock();
+        OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));
+        stream.write(o);
+        o.close();
+
+        InputStream changedStream = new BufferedInputStream(new FileInputStream(outfile));
+        CertificateFactory cf = CertificateFactory.getInstance("X.509");
+        X509CRL changedCrl = (X509CRL) cf.generateCRL(changedStream);
+
+        Set<BigInteger> discoveredSerials = new HashSet<BigInteger>();
+
+        for (X509CRLEntry entry : changedCrl.getRevokedCertificates()) {
+            discoveredSerials.add(entry.getSerialNumber());
+        }
+
+        Set<BigInteger> expected = new HashSet<BigInteger>();
+        expected.add(new BigInteger("100"));
+        expected.add(new BigInteger("9000"));
+
+        assertEquals(expected, discoveredSerials);
+    }
+
+
+    @Test
     public void testModifyUpdatedTime() throws Exception {
         X509v2CRLBuilder crlBuilder = new X509v2CRLBuilder(issuer, new Date());
         crlBuilder.addCRLEntry(new BigInteger("100"), new Date(), CRLReason.unspecified);
@@ -243,7 +289,14 @@ public class X509CRLStreamWriterTest {
         FileUtils.writeByteArrayToFile(crlToChange, crl.getEncoded());
 
         File outfile = new File(folder.getRoot(), "new.crl");
-        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate(), signingAlg);
+        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate(),
+            new CRLEntryValidator() {
+                @Override
+                public boolean shouldKeep(X509CRLEntryObject entry) {
+                    return true;
+                }
+            },
+            signingAlg);
         stream.add(new BigInteger("9000"), new Date(), 0);
         stream.lock();
         OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));

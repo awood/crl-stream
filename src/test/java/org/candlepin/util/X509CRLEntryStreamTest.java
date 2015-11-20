@@ -48,7 +48,7 @@ import java.util.HashSet;
 import java.util.Set;
 
 
-public class X509CRLSerialStreamTest {
+public class X509CRLEntryStreamTest {
     private static final BouncyCastleProvider BC = new BouncyCastleProvider();
 
     @Rule
@@ -63,10 +63,10 @@ public class X509CRLSerialStreamTest {
 
     @Before
     public void setUp() throws Exception {
-        URL url = X509CRLSerialStreamTest.class.getClassLoader().getResource("crl.der");
+        URL url = X509CRLEntryStreamTest.class.getClassLoader().getResource("crl.der");
         derFile = new File(url.getFile());
 
-        url = X509CRLSerialStreamTest.class.getClassLoader().getResource("crl.pem");
+        url = X509CRLEntryStreamTest.class.getClassLoader().getResource("crl.pem");
         pemFile = new File(url.getFile());
 
         issuer = new X500Name("CN=Test Issuer");
@@ -93,11 +93,11 @@ public class X509CRLSerialStreamTest {
             referenceSerials.add(entry.getSerialNumber());
         }
 
-        X509CRLSerialStream stream = new X509CRLSerialStream(derFile);
+        X509CRLEntryStream stream = new X509CRLEntryStream(derFile);
         try {
             Set<BigInteger> streamedSerials = new HashSet<BigInteger>();
             while (stream.hasNext()) {
-                streamedSerials.add(stream.next());
+                streamedSerials.add(stream.next().getSerialNumber());
             }
 
             assertEquals(referenceSerials, streamedSerials);
@@ -117,11 +117,11 @@ public class X509CRLSerialStreamTest {
         File noUpdateTimeCrl = new File(folder.getRoot(), "test.crl");
         FileUtils.writeByteArrayToFile(noUpdateTimeCrl, crl.getEncoded());
 
-        X509CRLSerialStream stream = new X509CRLSerialStream(noUpdateTimeCrl);
+        X509CRLEntryStream stream = new X509CRLEntryStream(noUpdateTimeCrl);
         try {
             Set<BigInteger> streamedSerials = new HashSet<BigInteger>();
             while (stream.hasNext()) {
-                streamedSerials.add(stream.next());
+                streamedSerials.add(stream.next().getSerialNumber());
             }
 
             assertEquals(1, streamedSerials.size());
@@ -155,11 +155,11 @@ public class X509CRLSerialStreamTest {
             referenceSerials.add(entry.getSerialNumber());
         }
 
-        X509CRLSerialStream stream = new X509CRLSerialStream(derFile);
+        X509CRLEntryStream stream = new X509CRLEntryStream(derFile);
         try {
             Set<BigInteger> streamedSerials = new HashSet<BigInteger>();
             while (stream.hasNext()) {
-                streamedSerials.add(stream.next());
+                streamedSerials.add(stream.next().getSerialNumber());
             }
 
             assertEquals(referenceSerials, streamedSerials);

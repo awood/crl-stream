@@ -49,6 +49,7 @@ import org.bouncycastle.crypto.digests.SHA256Digest;
 import org.bouncycastle.crypto.digests.SHA384Digest;
 import org.bouncycastle.crypto.params.RSAKeyParameters;
 import org.bouncycastle.crypto.signers.RSADigestSigner;
+import org.bouncycastle.jce.provider.X509CRLEntryObject;
 import org.bouncycastle.operator.DefaultDigestAlgorithmIdentifierFinder;
 import org.bouncycastle.operator.DefaultSignatureAlgorithmIdentifierFinder;
 
@@ -56,15 +57,17 @@ import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.math.BigInteger;
+import java.security.cert.CRLException;
 import java.security.interfaces.RSAPrivateKey;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Set;
 import java.util.Vector;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -73,10 +76,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class X509CRLStreamWriter {
     public static final String DEFAULT_ALGORITHM = "SHA256withRSA";
+    public static final CRLEntryValidator NOOP_VALIDATOR = null;
 
     private boolean locked = false;
 
     private List<DERSequence> newEntries;
+    private Set<BigInteger> deletedEntries;
 
     private InputStream crlIn;
     private RSAPrivateKey key;
@@ -88,13 +93,30 @@ public class X509CRLStreamWriter {
     private AlgorithmIdentifier signingAlg;
     private AlgorithmIdentifier digestAlg;
 
+    private CRLEntryValidator validator;
+
+    private int deletedEntriesLength;
+
     public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key)
-        throws FileNotFoundException, CryptoException {
-        this(crlToChange, key, DEFAULT_ALGORITHM);
+        throws CryptoException, IOException {
+        this(crlToChange, key, NOOP_VALIDATOR);
     }
 
-    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key, String algorithmName)
-        throws FileNotFoundException, CryptoException {
+    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key, CRLEntryValidator validator)
+        throws CryptoException, IOException {
+        this(crlToChange, key, validator, DEFAULT_ALGORITHM);
+    }
+
+    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key, CRLEntryValidator validator, String algorithmName)
+        throws CryptoException, IOException {
+        this.validator = validator;
+        this.deletedEntries = new HashSet<BigInteger>();
+        this.deletedEntriesLength = 0;
+
+        if (validator != null) {
+            collectDeadEntries(crlToChange);
+        }
+
         this.newEntries = new LinkedList<DERSequence>();
         this.crlIn = new BufferedInputStream(new FileInputStream(crlToChange));
         this.key = key;
@@ -107,6 +129,30 @@ public class X509CRLStreamWriter {
 
         this.hasher = createDigest(digestAlg);
         this.count = new AtomicInteger();
+    }
+
+    protected void collectDeadEntries(File crlToChange) throws IOException {
+        X509CRLEntryStream reaperStream = null;
+
+        try {
+            reaperStream = new X509CRLEntryStream(crlToChange);
+            while(reaperStream.hasNext()) {
+                X509CRLEntryObject entry = reaperStream.next();
+                if (!validator.shouldKeep(entry)) {
+                    deletedEntries.add(entry.getSerialNumber());
+                    deletedEntriesLength += entry.getEncoded().length;
+                }
+            }
+        }
+        catch (CRLException e) {
+            throw new IOException("Could not read CRL entry", e);
+        }
+
+        finally {
+            if (reaperStream != null) {
+                reaperStream.close();
+            }
+        }
     }
 
     /**
@@ -169,10 +215,27 @@ public class X509CRLStreamWriter {
 
         originalLength = handleHeader(out);
 
+        int tag;
+        int tagNo;
+        int length;
+
         while (originalLength > count.get()) {
-            echoTag(out, count);
-            int length = echoLength(out, count);
-            echoValue(out, length, count);
+            tag = readTag(crlIn, count);
+            tagNo = readTagNumber(crlIn, tag, count);
+            length = readLength(crlIn, count);
+            byte[] entryBytes = new byte[length];
+            readFullyAndTrack(crlIn, entryBytes, count);
+
+            DERInteger serial = (DERInteger) DERInteger.fromByteArray(entryBytes);
+
+            if (!deletedEntries.contains(serial.getValue())) {
+                out.write(rebuildTag(tag, tagNo));
+                hasher.update(new Integer(tag).byteValue());
+                writeLength(out, length);
+                hasher.update(new Integer(length).byteValue());
+                out.write(entryBytes);
+                hasher.update(entryBytes, 0, entryBytes.length);
+            }
         }
 
         /* Read SignatureAlgorithm on old CRL and throw an exception if it doesn't
@@ -225,10 +288,12 @@ public class X509CRLStreamWriter {
         }
 
         int tag = readTag(crlIn, null);
-        int length = readLength(crlIn, null) + newEntriesLength;
+        int tagNo = readTagNumber(crlIn, tag, null);
+        int length = readLength(crlIn, null) + newEntriesLength - deletedEntriesLength;
 
-        // NB: The top level sequence isn't part of the signature
-        out.write(tag);
+        // NB: The top level sequence isn't part of the signature so none of the above
+        // items go through the hasher
+        out.write(rebuildTag(tag, tagNo));
 
         /* If the algorithm signature on the original CRL doesn't match what
          * we are using, this will not work since the signature lengths could
@@ -241,10 +306,12 @@ public class X509CRLStreamWriter {
         writeLength(out, length);
 
         // Now we are in the TBSCertList
-        echoTag(out);
-        inflateLength(out, newEntriesLength);
+        int lengthDelta = newEntriesLength - deletedEntriesLength;
 
-        int tagNo = DERTags.NULL;
+        echoTag(out);
+        adjustLength(out, lengthDelta);
+
+        tagNo = DERTags.NULL;
         Date oldThisUpdate = null;
         while (true) {
             tag = readTag(crlIn, null);
@@ -276,8 +343,8 @@ public class X509CRLStreamWriter {
             out.write(rebuildTag(tag, tagNo));
         }
 
-        length = inflateLength(out, newEntriesLength);
-        int originalLength = length - newEntriesLength;
+        length = adjustLength(out, lengthDelta);
+        int originalLength = length - lengthDelta;
 
         return originalLength;
     }
@@ -397,8 +464,8 @@ public class X509CRLStreamWriter {
         return length;
     }
 
-    protected int inflateLength(OutputStream out, int addedLength) throws IOException {
-        int length = readLength(crlIn, null) + addedLength;
+    protected int adjustLength(OutputStream out, int lengthDelta) throws IOException {
+        int length = readLength(crlIn, null) + lengthDelta;
         writeLength(out, length);
         hasher.update(new Integer(length).byteValue());
         return length;

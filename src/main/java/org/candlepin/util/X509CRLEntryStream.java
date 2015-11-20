@@ -17,18 +17,19 @@ package org.candlepin.util;
 import static org.bouncycastle.asn1.DERTags.*;
 import static org.candlepin.util.DERUtil.*;
 
-import org.bouncycastle.asn1.DERInteger;
+import org.bouncycastle.asn1.DERSequence;
+import org.bouncycastle.asn1.x509.TBSCertList.CRLEntry;
+import org.bouncycastle.jce.provider.X509CRLEntryObject;
 
 import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.math.BigInteger;
 import java.util.Iterator;
 import java.util.concurrent.atomic.AtomicInteger;
-
 
 /**
  * Reads an X509 CRL in a stream and returns the serial number for a revoked certificate
@@ -84,7 +85,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * See https://en.wikipedia.org/wiki/X.690 and http://luca.ntop.org/Teaching/Appunti/asn1.html
  * for reference on ASN1 and DER encoding.
  */
-public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
+public class X509CRLEntryStream implements Closeable, Iterator<X509CRLEntryObject> {
     private InputStream crlStream;
 
     // TODO should be a BigInteger?  Apparently long definite lengths can go up to 2^1008 - 1
@@ -100,7 +101,7 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
      * @param stream
      * @throws IOException if we can't read the provided File
      */
-    public X509CRLSerialStream(InputStream stream) throws IOException {
+    public X509CRLEntryStream(InputStream stream) throws IOException {
         crlStream = stream;
         revokedSeqBytes = discardHeader(crlStream);
         count = new AtomicInteger();
@@ -113,7 +114,7 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
      * @param crlFile
      * @throws IOException if we can't read the provided File
      */
-    public X509CRLSerialStream(File crlFile) throws IOException {
+    public X509CRLEntryStream(File crlFile) throws IOException {
         this(new BufferedInputStream(new FileInputStream(crlFile)));
     }
 
@@ -170,7 +171,7 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
         return readLength(s, count);
     }
 
-    public BigInteger next() {
+    public X509CRLEntryObject next() {
         try {
             // Strip the tag for the revokedCertificate entry
             int tag = readTag(crlStream, count);
@@ -181,24 +182,16 @@ public class X509CRLSerialStream implements Closeable, Iterator<BigInteger> {
             byte[] entry = new byte[entryLength];
             readFullyAndTrack(crlStream, entry, count);
 
-            /* If we needed access to all the pieces of the revokedCertificate sequence
-             * we would need to rebuilt the sequence since we've already stripped off
-             * the tag and length.  The code to do so is below.
+            ByteArrayOutputStream reconstructed = new ByteArrayOutputStream();
+            // An ASN1 SEQUENCE tag is 0x30
+            reconstructed.write(0x30);
+            reconstructed.write(entryLength);
+            reconstructed.write(entry);
+            DERSequence obj = (DERSequence) DERSequence.fromByteArray(reconstructed.toByteArray());
 
-             * ByteArrayOutputStream reconstructed = new ByteArrayOutputStream();
-             * // An ASN1 SEQUENCE tag is 0x30
-             * reconstructed.write(0x30);
-             * reconstructed.write(entryLength);
-             * reconstructed.write(entry);
-             * DERSequence obj = (DERSequence) DERSequence.fromByteArray(reconstructed.toByteArray());
-             */
+            CRLEntry crlEntry = new CRLEntry(obj);
 
-            /* Right now we are only using the serial number which is first in
-             * the revokedCertificate sequence.  So all we need to do is read the next
-             * TLV.  All the extra stuff in the entry byte array will just be ignored.
-             */
-            DERInteger serial = (DERInteger) DERInteger.fromByteArray(entry);
-            return serial.getValue();
+            return new X509CRLEntryObject(crlEntry);
         }
         catch (IOException e) {
             throw new RuntimeException(e);
