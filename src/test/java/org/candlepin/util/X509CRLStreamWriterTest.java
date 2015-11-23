@@ -126,6 +126,7 @@ public class X509CRLStreamWriterTest {
         InputStream changedStream = new BufferedInputStream(new FileInputStream(outfile));
         CertificateFactory cf = CertificateFactory.getInstance("X.509");
         X509CRL changedCrl = (X509CRL) cf.generateCRL(changedStream);
+        changedCrl.verify(keyPair.getPublic(), BC);
 
         Set<BigInteger> discoveredSerials = new HashSet<BigInteger>();
 
@@ -155,8 +156,8 @@ public class X509CRLStreamWriterTest {
 
         CRLEntryValidator validator = new CRLEntryValidator() {
             @Override
-            public boolean shouldKeep(X509CRLEntryObject entry) {
-                return entry.getSerialNumber().equals(new BigInteger("100"));
+            public boolean shouldDelete(X509CRLEntryObject entry) {
+                return entry.getSerialNumber().equals(new BigInteger("101"));
             }
         };
 
@@ -170,6 +171,7 @@ public class X509CRLStreamWriterTest {
         InputStream changedStream = new BufferedInputStream(new FileInputStream(outfile));
         CertificateFactory cf = CertificateFactory.getInstance("X.509");
         X509CRL changedCrl = (X509CRL) cf.generateCRL(changedStream);
+        changedCrl.verify(keyPair.getPublic(), BC);
 
         Set<BigInteger> discoveredSerials = new HashSet<BigInteger>();
 
@@ -183,7 +185,6 @@ public class X509CRLStreamWriterTest {
 
         assertEquals(expected, discoveredSerials);
     }
-
 
     @Test
     public void testModifyUpdatedTime() throws Exception {
@@ -207,6 +208,7 @@ public class X509CRLStreamWriterTest {
         InputStream changedStream = new BufferedInputStream(new FileInputStream(outfile));
         CertificateFactory cf = CertificateFactory.getInstance("X.509");
         X509CRL changedCrl = (X509CRL) cf.generateCRL(changedStream);
+        changedCrl.verify(keyPair.getPublic(), BC);
 
         assertTrue("Error: CRL thisUpdate field unmodified", crl.getThisUpdate().before(changedCrl.getThisUpdate()));
     }
@@ -239,6 +241,7 @@ public class X509CRLStreamWriterTest {
         InputStream changedStream = new BufferedInputStream(new FileInputStream(outfile));
         CertificateFactory cf = CertificateFactory.getInstance("X.509");
         X509CRL changedCrl = (X509CRL) cf.generateCRL(changedStream);
+        changedCrl.verify(keyPair.getPublic(), BC);
 
         assertTrue("Error: CRL nextUpdate field unmodified", crl.getNextUpdate().before(changedCrl.getNextUpdate()));
     }
@@ -265,7 +268,6 @@ public class X509CRLStreamWriterTest {
             new MatchesPattern("Signing algorithm mismatch.*"));
 
         X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate());
-        stream.add(new BigInteger("9000"), new Date(), 0);
         stream.lock();
         OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));
         stream.write(o);
@@ -292,8 +294,8 @@ public class X509CRLStreamWriterTest {
         X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate(),
             new CRLEntryValidator() {
                 @Override
-                public boolean shouldKeep(X509CRLEntryObject entry) {
-                    return true;
+                public boolean shouldDelete(X509CRLEntryObject entry) {
+                    return false;
                 }
             },
             signingAlg);
@@ -306,6 +308,7 @@ public class X509CRLStreamWriterTest {
         InputStream changedStream = new BufferedInputStream(new FileInputStream(outfile));
         CertificateFactory cf = CertificateFactory.getInstance("X.509");
         X509CRL changedCrl = (X509CRL) cf.generateCRL(changedStream);
+        changedCrl.verify(keyPair.getPublic(), BC);
 
         Set<BigInteger> discoveredSerials = new HashSet<BigInteger>();
 

@@ -14,6 +14,7 @@
  */
 package org.candlepin.util;
 
+import org.bouncycastle.crypto.Signer;
 import org.bouncycastle.util.io.Streams;
 
 import java.io.EOFException;
@@ -208,7 +209,7 @@ public class DERUtil {
      * @param length
      * @throws IOException if something goes wrong
      */
-    public static void writeLength(OutputStream out, int length) throws IOException {
+    public static void writeLength(OutputStream out, int length, Signer hasher) throws IOException {
         if (length > 127) {
             int size = 1;
             int val = length;
@@ -217,14 +218,41 @@ public class DERUtil {
                 size++;
             }
 
-            out.write((byte) (size | 0x80));
+            byte b = (byte) (size | 0x80);
+            out.write(b);
+            if (hasher != null) {
+                hasher.update(b);
+            }
 
             for (int i = (size - 1) * 8; i >= 0; i -= 8) {
-                out.write((byte) (length >> i));
+                b = (byte) (length >> i);
+                out.write(b);
+                if (hasher != null) {
+                    hasher.update(b);
+                }
             }
         }
         else {
-            out.write((byte) length);
+            byte b = (byte) length;
+            out.write(b);
+            if (hasher != null) {
+                hasher.update(b);
+            }
+        }
+    }
+
+    public static void writeTag(OutputStream out, int tag, int tagNo, Signer hasher) throws IOException {
+        int rebuiltTag = rebuildTag(tag, tagNo);
+        out.write(rebuiltTag);
+        if (hasher != null) {
+            hasher.update((byte) rebuiltTag);
+        }
+    }
+
+    public static void writeValue(OutputStream out, byte[] value, Signer signer) throws IOException {
+        out.write(value);
+        if (signer != null) {
+            signer.update(value, 0, value.length);
         }
     }
 
@@ -235,5 +263,10 @@ public class DERUtil {
         }
 
         return tag;
+    }
+
+    public static void writeDER(OutputStream out, byte[] der, Signer hasher) throws IOException {
+        out.write(der);
+        hasher.update(der, 0, der.length);
     }
 }

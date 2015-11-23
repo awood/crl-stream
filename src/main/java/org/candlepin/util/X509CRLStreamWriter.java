@@ -86,7 +86,6 @@ public class X509CRLStreamWriter {
     private InputStream crlIn;
     private RSAPrivateKey key;
 
-    private Digest hasher;
     private Integer originalLength;
     private AtomicInteger count;
 
@@ -96,6 +95,7 @@ public class X509CRLStreamWriter {
     private CRLEntryValidator validator;
 
     private int deletedEntriesLength;
+    private RSADigestSigner signer;
 
     public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key)
         throws CryptoException, IOException {
@@ -127,7 +127,10 @@ public class X509CRLStreamWriter {
         this.signingAlg = new DefaultSignatureAlgorithmIdentifierFinder().find(algorithmName);
         this.digestAlg = new DefaultDigestAlgorithmIdentifierFinder().find(signingAlg);
 
-        this.hasher = createDigest(digestAlg);
+        // Build the digest
+        this.signer = new RSADigestSigner(createDigest(digestAlg));
+        signer.init(true, new RSAKeyParameters(true, key.getModulus(), key.getPrivateExponent()));
+
         this.count = new AtomicInteger();
     }
 
@@ -138,7 +141,7 @@ public class X509CRLStreamWriter {
             reaperStream = new X509CRLEntryStream(crlToChange);
             while(reaperStream.hasNext()) {
                 X509CRLEntryObject entry = reaperStream.next();
-                if (!validator.shouldKeep(entry)) {
+                if (validator.shouldDelete(entry)) {
                     deletedEntries.add(entry.getSerialNumber());
                     deletedEntriesLength += entry.getEncoded().length;
                 }
@@ -229,12 +232,9 @@ public class X509CRLStreamWriter {
             DERInteger serial = (DERInteger) DERInteger.fromByteArray(entryBytes);
 
             if (!deletedEntries.contains(serial.getValue())) {
-                out.write(rebuildTag(tag, tagNo));
-                hasher.update(new Integer(tag).byteValue());
-                writeLength(out, length);
-                hasher.update(new Integer(length).byteValue());
-                out.write(entryBytes);
-                hasher.update(entryBytes, 0, entryBytes.length);
+                writeTag(out, tag, tagNo, signer);
+                writeLength(out, length, signer);
+                writeValue(out, entryBytes, signer);
             }
         }
 
@@ -259,14 +259,11 @@ public class X509CRLStreamWriter {
 
         // Write the new entries into the new CRL
         for (DERSequence entry : newEntries) {
-            out.write(entry.getDEREncoded());
+            writeDER(out, entry.getDEREncoded(), signer);
         }
 
         out.write(signingAlg.getDEREncoded());
 
-        // Build the digest
-        RSADigestSigner signer = new RSADigestSigner(hasher);
-        signer.init(true, new RSAKeyParameters(true, key.getModulus(), key.getPrivateExponent()));
         try {
             byte[] signature = signer.generateSignature();
 
@@ -287,13 +284,15 @@ public class X509CRLStreamWriter {
             newEntriesLength += s.getDEREncoded().length;
         }
 
+        int lengthDelta = newEntriesLength - deletedEntriesLength;
+
         int tag = readTag(crlIn, null);
         int tagNo = readTagNumber(crlIn, tag, null);
-        int length = readLength(crlIn, null) + newEntriesLength - deletedEntriesLength;
+        int length = readLength(crlIn, null) + lengthDelta;
 
         // NB: The top level sequence isn't part of the signature so none of the above
-        // items go through the hasher
-        out.write(rebuildTag(tag, tagNo));
+        // items should go through the hasher
+        writeTag(out, tag, tagNo, null);
 
         /* If the algorithm signature on the original CRL doesn't match what
          * we are using, this will not work since the signature lengths could
@@ -303,12 +302,10 @@ public class X509CRLStreamWriter {
          * will be affected.  We'll report the error when we detect the discrepancy
          * in algorithms later.
          */
-        writeLength(out, length);
+        writeLength(out, length, null);
 
         // Now we are in the TBSCertList
-        int lengthDelta = newEntriesLength - deletedEntriesLength;
-
-        echoTag(out);
+        echoTag(out, null);
         adjustLength(out, lengthDelta);
 
         tagNo = DERTags.NULL;
@@ -322,9 +319,9 @@ public class X509CRLStreamWriter {
                 break;
             }
             else {
-                out.write(rebuildTag(tag, tagNo));
-                length = echoLength(out);
-                echoValue(out, length);
+                writeTag(out, tag, tagNo, signer);
+                length = echoLength(out, null);
+                echoValue(out, length, null);
             }
         }
 
@@ -337,10 +334,10 @@ public class X509CRLStreamWriter {
              * but I'm not sure if the added complexity is worth it.
              */
             offsetNextUpdate(out, tagNo, oldThisUpdate);
-            echoTag(out);
+            echoTag(out, null);
         }
         else {
-            out.write(rebuildTag(tag, tagNo));
+            writeTag(out, tag, tagNo, signer);
         }
 
         length = adjustLength(out, lengthDelta);
@@ -424,62 +421,51 @@ public class X509CRLStreamWriter {
     protected void writeNewTime(OutputStream out, DERObject newTime, int originalLength) throws IOException {
         byte[] newEncodedTime = newTime.getDEREncoded();
 
-        InputStream timeIn = new ByteArrayInputStream(newEncodedTime);
-        int newTag = readTag(timeIn, null);
-        readTagNumber(timeIn, newTag, null);
-        int newLength = readLength(timeIn, null);
+        InputStream timeIn = null;
+        try {
+            timeIn = new ByteArrayInputStream(newEncodedTime);
+            int newTag = readTag(timeIn, null);
+            readTagNumber(timeIn, newTag, null);
+            int newLength = readLength(timeIn, null);
 
-        /* If the length changes, it's going to create a discrepancy with the length
-         * reported in the TBSCertList sequence.  The length could change with the addition
-         * or removal of time zone information for example. */
-        if (newLength != originalLength) {
-            throw new IllegalStateException("Length of generated time does not match the original length." +
-                "  Corruption would result.");
+            /* If the length changes, it's going to create a discrepancy with the length
+             * reported in the TBSCertList sequence.  The length could change with the addition
+             * or removal of time zone information for example. */
+            if (newLength != originalLength) {
+                throw new IllegalStateException("Length of generated time does not match the original length." +
+                    "  Corruption would result.");
+            }
+        }
+        finally {
+            IOUtils.closeQuietly(timeIn);
         }
 
-        out.write(newEncodedTime);
-        hasher.update(newEncodedTime, 0, newEncodedTime.length);
-    }
-
-    protected int echoTag(OutputStream out) throws IOException {
-        return echoTag(out, null);
+        writeDER(out, newEncodedTime, signer);
     }
 
     protected int echoTag(OutputStream out, AtomicInteger i) throws IOException {
         int tag = readTag(crlIn, i);
         int tagNo = readTagNumber(crlIn, tag, i);
-        out.write(rebuildTag(tag, tagNo));
-        hasher.update(new Integer(tag).byteValue());
+        writeTag(out, tag, tagNo, signer);
         return tagNo;
-    }
-
-    protected int echoLength(OutputStream out) throws IOException {
-        return echoLength(out, null);
     }
 
     protected int echoLength(OutputStream out, AtomicInteger i) throws IOException {
         int length = readLength(crlIn, i);
-        writeLength(out, length);
-        hasher.update(new Integer(length).byteValue());
+        writeLength(out, length, signer);
         return length;
     }
 
     protected int adjustLength(OutputStream out, int lengthDelta) throws IOException {
         int length = readLength(crlIn, null) + lengthDelta;
-        writeLength(out, length);
-        hasher.update(new Integer(length).byteValue());
+        writeLength(out, length, signer);
         return length;
-    }
-
-    protected void echoValue(OutputStream out, int length) throws IOException {
-        echoValue(out, length, null);
     }
 
     protected void echoValue(OutputStream out, int length, AtomicInteger i) throws IOException {
         byte[] item = new byte[length];
         readFullyAndTrack(crlIn, item, i);
-        out.write(item);
-        hasher.update(item, 0, item.length);
+        writeValue(out, item, signer);
     }
 
     protected static Digest createDigest(AlgorithmIdentifier digAlg) throws CryptoException {

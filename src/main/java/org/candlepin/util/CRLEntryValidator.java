@@ -21,5 +21,5 @@ import org.bouncycastle.jce.provider.X509CRLEntryObject;
  * existing entry or not.
  */
 public interface CRLEntryValidator {
-    boolean shouldKeep(X509CRLEntryObject entry);
+    boolean shouldDelete(X509CRLEntryObject entry);
 }
