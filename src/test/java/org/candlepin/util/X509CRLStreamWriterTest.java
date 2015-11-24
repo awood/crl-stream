@@ -116,7 +116,8 @@ public class X509CRLStreamWriterTest {
         FileUtils.writeByteArrayToFile(crlToChange, crl.getEncoded());
 
         File outfile = new File(folder.getRoot(), "new.crl");
-        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate());
+        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange,
+            (RSAPrivateKey) keyPair.getPrivate());
         stream.add(new BigInteger("9000"), new Date(), 0);
         stream.lock();
         OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));
@@ -161,7 +162,9 @@ public class X509CRLStreamWriterTest {
             }
         };
 
-        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate(), validator);
+        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange,
+            (RSAPrivateKey) keyPair.getPrivate());
+        stream.collectDeadEntries(crlToChange, validator);
         stream.add(new BigInteger("9000"), new Date(), 0);
         stream.lock();
         OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));
@@ -199,7 +202,8 @@ public class X509CRLStreamWriterTest {
         Thread.sleep(1000);
 
         File outfile = new File(folder.getRoot(), "new.crl");
-        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate());
+        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange,
+            (RSAPrivateKey) keyPair.getPrivate());
         stream.lock();
         OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));
         stream.write(o);
@@ -210,7 +214,8 @@ public class X509CRLStreamWriterTest {
         X509CRL changedCrl = (X509CRL) cf.generateCRL(changedStream);
         changedCrl.verify(keyPair.getPublic(), BC);
 
-        assertTrue("Error: CRL thisUpdate field unmodified", crl.getThisUpdate().before(changedCrl.getThisUpdate()));
+        assertTrue("Error: CRL thisUpdate field unmodified",
+            crl.getThisUpdate().before(changedCrl.getThisUpdate()));
     }
 
     @Test
@@ -232,7 +237,8 @@ public class X509CRLStreamWriterTest {
         Thread.sleep(1000);
 
         File outfile = new File(folder.getRoot(), "new.crl");
-        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate());
+        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange,
+            (RSAPrivateKey) keyPair.getPrivate());
         stream.lock();
         OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));
         stream.write(o);
@@ -243,7 +249,8 @@ public class X509CRLStreamWriterTest {
         X509CRL changedCrl = (X509CRL) cf.generateCRL(changedStream);
         changedCrl.verify(keyPair.getPublic(), BC);
 
-        assertTrue("Error: CRL nextUpdate field unmodified", crl.getNextUpdate().before(changedCrl.getNextUpdate()));
+        assertTrue("Error: CRL nextUpdate field unmodified",
+            crl.getNextUpdate().before(changedCrl.getNextUpdate()));
     }
 
     @Test
@@ -267,7 +274,8 @@ public class X509CRLStreamWriterTest {
         thrown.expectMessage(
             new MatchesPattern("Signing algorithm mismatch.*"));
 
-        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate());
+        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange,
+            (RSAPrivateKey) keyPair.getPrivate());
         stream.lock();
         OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));
         stream.write(o);
@@ -291,14 +299,8 @@ public class X509CRLStreamWriterTest {
         FileUtils.writeByteArrayToFile(crlToChange, crl.getEncoded());
 
         File outfile = new File(folder.getRoot(), "new.crl");
-        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange, (RSAPrivateKey) keyPair.getPrivate(),
-            new CRLEntryValidator() {
-                @Override
-                public boolean shouldDelete(X509CRLEntryObject entry) {
-                    return false;
-                }
-            },
-            signingAlg);
+        X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange,
+            (RSAPrivateKey) keyPair.getPrivate(), signingAlg);
         stream.add(new BigInteger("9000"), new Date(), 0);
         stream.lock();
         OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));

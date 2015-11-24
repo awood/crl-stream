@@ -76,8 +76,6 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class X509CRLStreamWriter {
     public static final String DEFAULT_ALGORITHM = "SHA256withRSA";
-    public static final CRLEntryValidator NOOP_VALIDATOR = null;
-
     private boolean locked = false;
 
     private List<DERSequence> newEntries;
@@ -91,33 +89,32 @@ public class X509CRLStreamWriter {
     private AlgorithmIdentifier signingAlg;
     private AlgorithmIdentifier digestAlg;
 
-    private CRLEntryValidator validator;
-
     private int deletedEntriesLength;
     private RSADigestSigner signer;
 
     public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key)
         throws CryptoException, IOException {
-        this(crlToChange, key, NOOP_VALIDATOR);
+        this(crlToChange, key, DEFAULT_ALGORITHM);
     }
 
-    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key, CRLEntryValidator validator)
+    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key, String alorithmName)
         throws CryptoException, IOException {
-        this(crlToChange, key, validator, DEFAULT_ALGORITHM);
+        this(new BufferedInputStream(new FileInputStream(crlToChange)), key,
+            alorithmName);
     }
 
-    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key, CRLEntryValidator validator, String algorithmName)
+    public X509CRLStreamWriter(InputStream crlToChange, RSAPrivateKey key)
         throws CryptoException, IOException {
-        this.validator = validator;
+        this(crlToChange, key, DEFAULT_ALGORITHM);
+    }
+
+    public X509CRLStreamWriter(InputStream crlToChange, RSAPrivateKey key, String algorithmName)
+        throws CryptoException, IOException {
         this.deletedEntries = new HashSet<BigInteger>();
         this.deletedEntriesLength = 0;
 
-        if (validator != null) {
-            collectDeadEntries(crlToChange);
-        }
-
         this.newEntries = new LinkedList<DERSequence>();
-        this.crlIn = new BufferedInputStream(new FileInputStream(crlToChange));
+        this.crlIn = crlToChange;
 
         if (!algorithmName.contains("RSA")) {
             throw new IllegalArgumentException("This class is only compatible with RSA signing.");
@@ -132,12 +129,22 @@ public class X509CRLStreamWriter {
         this.count = new AtomicInteger();
     }
 
-    protected void collectDeadEntries(File crlToChange) throws IOException {
+    public void collectDeadEntries(File crlToChange, CRLEntryValidator validator)
+        throws IOException {
+        collectDeadEntries(new BufferedInputStream(new FileInputStream(crlToChange)), validator);
+    }
+
+    public void collectDeadEntries(InputStream crlToChange, CRLEntryValidator validator)
+        throws IOException {
+        if (locked) {
+            throw new IllegalStateException("Cannot modify a locked stream.");
+        }
+
         X509CRLEntryStream reaperStream = null;
 
         try {
             reaperStream = new X509CRLEntryStream(crlToChange);
-            while(reaperStream.hasNext()) {
+            while (reaperStream.hasNext()) {
                 X509CRLEntryObject entry = reaperStream.next();
                 if (validator.shouldDelete(entry)) {
                     deletedEntries.add(entry.getSerialNumber());
@@ -353,7 +360,8 @@ public class X509CRLStreamWriter {
      * @param oldThisUpdate
      * @throws IOException
      */
-    protected void offsetNextUpdate(OutputStream out, int tagNo, Date oldThisUpdate) throws IOException {
+    protected void offsetNextUpdate(OutputStream out, int tagNo, Date oldThisUpdate)
+        throws IOException {
         int originalLength = readLength(crlIn, null);
         byte[] oldBytes = new byte[originalLength];
         readFullyAndTrack(crlIn, oldBytes, null);
@@ -414,7 +422,8 @@ public class X509CRLStreamWriter {
         return new Time(oldTime).getDate();
     }
 
-    protected void writeNewTime(OutputStream out, DERObject newTime, int originalLength) throws IOException {
+    protected void writeNewTime(OutputStream out, DERObject newTime, int originalLength)
+        throws IOException {
         byte[] newEncodedTime = newTime.getDEREncoded();
 
         InputStream timeIn = null;
@@ -428,8 +437,8 @@ public class X509CRLStreamWriter {
              * reported in the TBSCertList sequence.  The length could change with the addition
              * or removal of time zone information for example. */
             if (newLength != originalLength) {
-                throw new IllegalStateException("Length of generated time does not match the original length." +
-                    "  Corruption would result.");
+                throw new IllegalStateException("Length of generated time does not match " +
+                    "the original length. Corruption would result.");
             }
         }
         finally {
