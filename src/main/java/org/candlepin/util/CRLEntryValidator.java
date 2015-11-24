@@ -17,7 +17,7 @@ package org.candlepin.util;
 import org.bouncycastle.jce.provider.X509CRLEntryObject;
 
 /**
- * Simple validator class used by X509CRLStreamWriter to see whether to remove an
+ * Simple validatpr class used by X509CRLStreamWriter to see whether to remove an
  * existing entry or not.
  */
 public interface CRLEntryValidator {

@@ -84,7 +84,6 @@ public class X509CRLStreamWriter {
     private Set<BigInteger> deletedEntries;
 
     private InputStream crlIn;
-    private RSAPrivateKey key;
 
     private Integer originalLength;
     private AtomicInteger count;
@@ -119,7 +118,6 @@ public class X509CRLStreamWriter {
 
         this.newEntries = new LinkedList<DERSequence>();
         this.crlIn = new BufferedInputStream(new FileInputStream(crlToChange));
-        this.key = key;
 
         if (!algorithmName.contains("RSA")) {
             throw new IllegalArgumentException("This class is only compatible with RSA signing.");
@@ -248,9 +246,9 @@ public class X509CRLStreamWriter {
 
             if (!referenceAlgId.equals(signingAlg)) {
                 throw new IllegalStateException(
-                    "Signing algorithm mismatch.  This will result in an encoding error!  " +
-                        "Got " + referenceAlgId.getAlgorithm() + " but expected " +
-                        signingAlg.getAlgorithm());
+                    "Signing algorithm mismatch.  This will result in an encoding error! " +
+                    "Got " + referenceAlgId.getAlgorithm() + " but expected " +
+                    signingAlg.getAlgorithm());
             }
         }
         finally {
@@ -266,7 +264,6 @@ public class X509CRLStreamWriter {
 
         try {
             byte[] signature = signer.generateSignature();
-
             DERBitString signatureBits = new DERBitString(signature);
             out.write(signatureBits.getDEREncoded());
         }
@@ -290,8 +287,9 @@ public class X509CRLStreamWriter {
         int tagNo = readTagNumber(crlIn, tag, null);
         int length = readLength(crlIn, null) + lengthDelta;
 
-        // NB: The top level sequence isn't part of the signature so none of the above
-        // items should go through the hasher
+        /* NB: The top level sequence isn't part of the signature so none of the above
+         * items should go through the signer.
+         */
         writeTag(out, tag, tagNo, null);
 
         /* If the algorithm signature on the original CRL doesn't match what
@@ -347,8 +345,8 @@ public class X509CRLStreamWriter {
     }
 
     /**
-     * Write a new nextUpdate time that is the same amount of time ahead of the new thisUpdate time as
-     * the old nextUpdate was from the old thisUpdate.
+     * Write a new nextUpdate time that is the same amount of time ahead of the new thisUpdate
+     * time as the old nextUpdate was from the old thisUpdate.
      *
      * @param out
      * @param tagNo
@@ -404,13 +402,11 @@ public class X509CRLStreamWriter {
         if (tagNo == UTC_TIME) {
             DERTaggedObject t = new DERTaggedObject(UTC_TIME, new DEROctetString(oldBytes));
             oldTime = DERUTCTime.getInstance(t, false);
-
             newTime = new DERUTCTime(new Date());
         }
         else {
             DERTaggedObject t = new DERTaggedObject(GENERALIZED_TIME, new DEROctetString(oldBytes));
             oldTime = DERGeneralizedTime.getInstance(t, false);
-
             newTime = new DERGeneralizedTime(new Date());
         }
 
