@@ -20,11 +20,11 @@ import static org.candlepin.util.DERUtil.*;
 import org.apache.commons.io.IOUtils;
 import org.bouncycastle.asn1.ASN1EncodableVector;
 import org.bouncycastle.asn1.ASN1InputStream;
-import org.bouncycastle.asn1.ASN1Sequence;
 import org.bouncycastle.asn1.DERBitString;
 import org.bouncycastle.asn1.DERGeneralizedTime;
 import org.bouncycastle.asn1.DERInteger;
 import org.bouncycastle.asn1.DERObject;
+import org.bouncycastle.asn1.DERObjectIdentifier;
 import org.bouncycastle.asn1.DEROctetString;
 import org.bouncycastle.asn1.DERSequence;
 import org.bouncycastle.asn1.DERTaggedObject;
@@ -246,16 +246,30 @@ public class X509CRLStreamWriter {
         /* Read SignatureAlgorithm on old CRL and throw an exception if it doesn't
          * match expectations. */
         ASN1InputStream asn1In = null;
+        byte[] extensions = null;
         try {
             asn1In = new ASN1InputStream(crlIn);
-            ASN1Sequence algSeq = (ASN1Sequence) asn1In.readObject();
-            AlgorithmIdentifier referenceAlgId = new AlgorithmIdentifier(algSeq);
 
-            if (!referenceAlgId.equals(signingAlg)) {
-                throw new IllegalStateException(
-                    "Signing algorithm mismatch.  This will result in an encoding error! " +
-                    "Got " + referenceAlgId.getAlgorithm() + " but expected " +
-                    signingAlg.getAlgorithm());
+            DERObject o;
+            while ((o = asn1In.readObject()) != null) {
+                if (o instanceof DERSequence) {
+                    DERSequence seq = (DERSequence) o;
+                    if (seq.getObjectAt(0) instanceof DERObjectIdentifier) {
+                        AlgorithmIdentifier referenceAlgId = new AlgorithmIdentifier(seq);
+
+                        if (!referenceAlgId.equals(signingAlg)) {
+                            throw new IllegalStateException(
+                                "Signing algorithm mismatch.  This will result in an encoding error! " +
+                                "Got " + referenceAlgId.getAlgorithm() + " but expected " +
+                                signingAlg.getAlgorithm());
+                        }
+                    }
+                    // Don't want to write the actual old signature!
+                    break;
+                }
+                else {
+                    extensions = o.getDEREncoded();
+                }
             }
         }
         finally {
@@ -267,6 +281,11 @@ public class X509CRLStreamWriter {
             writeDER(out, entry.getDEREncoded(), signer);
         }
 
+        // Copy the old extensions over
+        if (extensions != null) {
+            out.write(extensions);
+            signer.update(extensions, 0, extensions.length);
+        }
         out.write(signingAlg.getDEREncoded());
 
         try {
