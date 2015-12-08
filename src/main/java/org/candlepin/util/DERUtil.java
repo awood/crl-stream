@@ -17,6 +17,7 @@ package org.candlepin.util;
 import org.bouncycastle.crypto.Signer;
 import org.bouncycastle.util.io.Streams;
 
+import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -29,6 +30,31 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class DERUtil {
     private DERUtil() {
         // No instances allowed
+    }
+
+    /**
+     * When the length of an ASN1 encoded value changes then the number of bytes representing
+     * the length of the value can change as well.  We need to calculate that change because
+     * those bytes will be accounted for in any container object.
+     *
+     * @param before
+     * @param after
+     * @return the number of bytes the length header changes
+     * @throws IOException if the streams cannot be written to.
+     */
+    public static int findHeaderBytesDelta(int before, int after)
+        throws IOException {
+        ByteArrayOutputStream oldTbsLengthStream = new ByteArrayOutputStream();
+        ByteArrayOutputStream newTbsLengthStream = new ByteArrayOutputStream();
+        try {
+            writeLength(oldTbsLengthStream, before, null);
+            writeLength(newTbsLengthStream, after, null);
+            return newTbsLengthStream.toByteArray().length - oldTbsLengthStream.toByteArray().length;
+        }
+        finally {
+            oldTbsLengthStream.close();
+            newTbsLengthStream.close();
+        }
     }
 
     /**
@@ -206,6 +232,10 @@ public class DERUtil {
         return length;
     }
 
+    public static void writeLength(OutputStream out, int length) throws IOException {
+        writeLength(out, length, null);
+    }
+
     /**
      * Write an integer as a DER encoded definite length.
      *
@@ -245,12 +275,20 @@ public class DERUtil {
         }
     }
 
+    public static void writeTag(OutputStream out, int tag, int tagNo) throws IOException {
+        writeTag(out, tag, tagNo, null);
+    }
+
     public static void writeTag(OutputStream out, int tag, int tagNo, Signer signer) throws IOException {
         int rebuiltTag = rebuildTag(tag, tagNo);
         out.write(rebuiltTag);
         if (signer != null) {
             signer.update((byte) rebuiltTag);
         }
+    }
+
+    public static void writeValue(OutputStream out, byte[] value) throws IOException {
+        writeValue(out, value, null);
     }
 
     public static void writeValue(OutputStream out, byte[] value, Signer signer) throws IOException {
@@ -269,8 +307,14 @@ public class DERUtil {
         return tag;
     }
 
+    public static void writeDER(OutputStream out, byte[] der) throws IOException {
+        writeDER(out, der, null);
+    }
+
     public static void writeDER(OutputStream out, byte[] der, Signer signer) throws IOException {
         out.write(der);
-        signer.update(der, 0, der.length);
+        if (signer != null) {
+            signer.update(der, 0, der.length);
+        }
     }
 }

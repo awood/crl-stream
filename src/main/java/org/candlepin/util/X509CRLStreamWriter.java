@@ -52,9 +52,12 @@ import org.bouncycastle.crypto.signers.RSADigestSigner;
 import org.bouncycastle.jce.provider.X509CRLEntryObject;
 import org.bouncycastle.operator.DefaultDigestAlgorithmIdentifierFinder;
 import org.bouncycastle.operator.DefaultSignatureAlgorithmIdentifierFinder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -64,6 +67,7 @@ import java.math.BigInteger;
 import java.security.cert.CRLException;
 import java.security.interfaces.RSAPrivateKey;
 import java.util.Date;
+import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
@@ -73,10 +77,49 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Class for adding entries to an X509 in a memory-efficient manner.
+ *
+ * The schema for an X509 CRL is described in
+ * <a href="https://tools.ietf.org/html/rfc5280#section-5">section 5 of RFC 5280</a>
+ *
+ * It is reproduced here for quick reference
+ *
+ * <pre>
+ * {@code
+ * CertificateList  ::=  SEQUENCE  {
+ *      tbsCertList          TBSCertList,
+ *      signatureAlgorithm   AlgorithmIdentifier,
+ *      signatureValue       BIT STRING  }
+ *
+ * TBSCertList  ::=  SEQUENCE  {
+ *      version                 Version OPTIONAL,
+ *                                   -- if present, MUST be v2
+ *      signature               AlgorithmIdentifier,
+ *      issuer                  Name,
+ *      thisUpdate              Time,
+ *      nextUpdate              Time OPTIONAL,
+ *      revokedCertificates     SEQUENCE OF SEQUENCE  {
+ *           userCertificate         CertificateSerialNumber,
+ *           revocationDate          Time,
+ *           crlEntryExtensions      Extensions OPTIONAL
+ *                                    -- if present, version MUST be v2
+ *                                }  OPTIONAL,
+ *      crlExtensions           [0]  EXPLICIT Extensions OPTIONAL
+ *                                    -- if present, version MUST be v2
+ *                                }
+ *
+ * Version, Time, CertificateSerialNumber, and Extensions
+ * are all defined in the ASN.1 in Section 4.1
+ *
+ * AlgorithmIdentifier is defined in Section 4.1.1.2
+ * }
+ * </pre>
  */
 public class X509CRLStreamWriter {
+    public static final Logger log = LoggerFactory.getLogger(X509CRLStreamWriter.class);
+
     public static final String DEFAULT_ALGORITHM = "SHA256withRSA";
     private boolean locked = false;
+    private boolean preScanned = false;
 
     private List<DERSequence> newEntries;
     private Set<BigInteger> deletedEntries;
@@ -91,6 +134,8 @@ public class X509CRLStreamWriter {
 
     private int deletedEntriesLength;
     private RSADigestSigner signer;
+    private DERInteger newCrlNumber;
+    private int crlNumberHeaderBytesDelta;
 
     public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key)
         throws CryptoException, IOException {
@@ -129,38 +174,107 @@ public class X509CRLStreamWriter {
         this.count = new AtomicInteger();
     }
 
-    public void collectDeadEntries(File crlToChange, CRLEntryValidator validator)
-        throws IOException {
-        collectDeadEntries(new BufferedInputStream(new FileInputStream(crlToChange)), validator);
+    public X509CRLStreamWriter preScan(File crlToChange) throws IOException {
+        return preScan(crlToChange, null);
     }
 
-    public void collectDeadEntries(InputStream crlToChange, CRLEntryValidator validator)
+    public X509CRLStreamWriter preScan(File crlToChange, CRLEntryValidator validator)
+        throws IOException {
+        return preScan(new BufferedInputStream(new FileInputStream(crlToChange)), validator);
+    }
+
+    public X509CRLStreamWriter preScan(InputStream crlToChange) throws IOException {
+        return preScan(crlToChange, null);
+    }
+
+    @SuppressWarnings("rawtypes")
+    public synchronized X509CRLStreamWriter preScan(InputStream crlToChange, CRLEntryValidator validator)
         throws IOException {
         if (locked) {
             throw new IllegalStateException("Cannot modify a locked stream.");
         }
 
+        if (preScanned) {
+            throw new IllegalStateException("preScan has already been run.");
+        }
+
         X509CRLEntryStream reaperStream = null;
+        ASN1InputStream asn1In = null;
 
         try {
             reaperStream = new X509CRLEntryStream(crlToChange);
             while (reaperStream.hasNext()) {
                 X509CRLEntryObject entry = reaperStream.next();
-                if (validator.shouldDelete(entry)) {
+                if (validator != null && validator.shouldDelete(entry)) {
                     deletedEntries.add(entry.getSerialNumber());
                     deletedEntriesLength += entry.getEncoded().length;
+                }
+            }
+
+            /* At this point, crlToChange is at the point where the crlExtensions would
+             * be.  RFC 5280 says that "Conforming CRL issuers are REQUIRED to include
+             * the authority key identifier (Section 5.2.1) and the CRL number (Section 5.2.3)
+             * extensions in all CRLs issued.
+             */
+            DERSequence extensions = null;
+            DERObject o;
+            asn1In = new ASN1InputStream(crlToChange);
+            while ((o = asn1In.readObject()) != null) {
+                if (o instanceof DERSequence) {
+                    // This means we are at the signature
+                    break;
+                }
+                else {
+                    if (extensions != null) {
+                        throw new IllegalStateException("Already read in CRL extensions.");
+                    }
+                    DERTaggedObject taggedExts = (DERTaggedObject) o;
+                    extensions = (DERSequence) taggedExts.getObject();
+                }
+            }
+
+            if (extensions == null) {
+                /* v1 CRLs (defined in RFC 1422) don't require extensions but all new
+                 * CRLs should be v2 (defined in RFC 5280).  In the extremely unlikely
+                 * event that someone is working with a v1 CRL, we handle it here although
+                 * we print a warning.
+                 */
+                preScanned = true;
+                newCrlNumber = null;
+                crlNumberHeaderBytesDelta = 0;
+                log.warn("The CRL you are modifying is a version 1 CRL." +
+                    " Please investigate moving to a version 2 CRL by adding the CRL Number" +
+                    " and Authority Key Identifier extensions.");
+                return this;
+            }
+
+            // Now we need to read the extensions and find the CRL number and increment it,
+            // and determine if its length changed.
+            Enumeration objs = extensions.getObjects();
+            while (objs.hasMoreElements()) {
+                DERSequence ext = (DERSequence) objs.nextElement();
+                DERObjectIdentifier oid = (DERObjectIdentifier) ext.getObjectAt(0);
+                if (X509Extension.cRLNumber.equals(oid)) {
+                    DEROctetString s = (DEROctetString) ext.getObjectAt(1);
+                    DERInteger i = (DERInteger) DERTaggedObject.fromByteArray(s.getOctets());
+                    newCrlNumber = new DERInteger(i.getValue().add(BigInteger.ONE));
+                    crlNumberHeaderBytesDelta =
+                        newCrlNumber.getDEREncoded().length - i.getDEREncoded().length;
+                    break;
                 }
             }
         }
         catch (CRLException e) {
             throw new IOException("Could not read CRL entry", e);
         }
-
         finally {
             if (reaperStream != null) {
                 reaperStream.close();
             }
+            IOUtils.closeQuietly(asn1In);
         }
+        preScanned = true;
+        return this;
     }
 
     /**
@@ -185,13 +299,8 @@ public class X509CRLStreamWriter {
             CRLReason crlReason = new CRLReason(reason);
             Vector extOids = new Vector();
             Vector extValues = new Vector();
-            try {
-                extOids.addElement(X509Extension.reasonCode);
-                extValues.addElement(new X509Extension(false, new DEROctetString(crlReason.getEncoded())));
-            }
-            catch (IOException e) {
-                throw new IllegalArgumentException("Could not encode reason: " + e);
-            }
+            extOids.addElement(X509Extension.reasonCode);
+            extValues.addElement(new X509Extension(false, new DEROctetString(crlReason.getDEREncoded())));
             v.add(new X509Extensions(extOids, extValues));
         }
 
@@ -200,13 +309,20 @@ public class X509CRLStreamWriter {
 
     /**
      * Locks the stream to prepare it for writing.
+     *
+     * @return itself
      */
-    public synchronized void lock() {
+    public synchronized X509CRLStreamWriter lock() {
         if (locked) {
             throw new IllegalStateException("This stream is already locked.");
         }
 
         locked = true;
+        return this;
+    }
+
+    public boolean hasChangesQueued() {
+        return this.newEntries.size() > 0 || this.deletedEntries.size() > 0;
     }
 
     /**
@@ -217,8 +333,8 @@ public class X509CRLStreamWriter {
      * @throws IOException if something goes wrong
      */
     public void write(OutputStream out) throws IOException {
-        if (!locked) {
-            throw new IllegalStateException("The instance must be locked before writing.");
+        if (!locked || !preScanned) {
+            throw new IllegalStateException("The instance must be preScanned and locked before writing.");
         }
 
         originalLength = handleHeader(out);
@@ -268,6 +384,9 @@ public class X509CRLStreamWriter {
                     break;
                 }
                 else {
+                    if (extensions != null) {
+                        throw new IllegalStateException("Already read in CRL extensions.");
+                    }
                     extensions = o.getDEREncoded();
                 }
             }
@@ -283,8 +402,9 @@ public class X509CRLStreamWriter {
 
         // Copy the old extensions over
         if (extensions != null) {
-            out.write(extensions);
-            signer.update(extensions, 0, extensions.length);
+            byte[] newExtensions = incrementCrlNumber(extensions);
+            out.write(newExtensions);
+            signer.update(newExtensions, 0, newExtensions.length);
         }
         out.write(signingAlg.getDEREncoded());
 
@@ -301,73 +421,131 @@ public class X509CRLStreamWriter {
         }
     }
 
-    protected int handleHeader(OutputStream out) throws IOException {
-        int newEntriesLength = 0;
-        for (DERSequence s : newEntries) {
-            newEntriesLength += s.getDEREncoded().length;
+    @SuppressWarnings("rawtypes")
+    protected byte[] incrementCrlNumber(byte[] extensions) throws IOException {
+        DERTaggedObject taggedExts = (DERTaggedObject) DERTaggedObject.fromByteArray(extensions);
+        DERSequence seq = (DERSequence) taggedExts.getObject();
+        ASN1EncodableVector modifiedExts = new ASN1EncodableVector();
+
+        // Now we need to read the extensions and find the CRL number and increment it,
+        // and determine if its length changed.
+        Enumeration objs = seq.getObjects();
+        while (objs.hasMoreElements()) {
+            DERSequence ext = (DERSequence) objs.nextElement();
+            DERObjectIdentifier oid = (DERObjectIdentifier) ext.getObjectAt(0);
+            if (X509Extension.cRLNumber.equals(oid)) {
+                X509Extension newNumberExt =
+                    new X509Extension(false, new DEROctetString(newCrlNumber.getDEREncoded()));
+
+                ASN1EncodableVector crlNumber = new ASN1EncodableVector();
+                crlNumber.add(X509Extension.cRLNumber);
+                crlNumber.add(newNumberExt.getValue());
+                modifiedExts.add(new DERSequence(crlNumber));
+            }
+            else {
+                modifiedExts.add(ext);
+            }
         }
 
-        int lengthDelta = newEntriesLength - deletedEntriesLength;
+        DERSequence seqOut = new DERSequence(modifiedExts);
+        DERTaggedObject out = new DERTaggedObject(true, 0, seqOut);
+        return out.getDEREncoded();
+    }
 
-        int tag = readTag(crlIn, null);
-        int tagNo = readTagNumber(crlIn, tag, null);
-        int length = readLength(crlIn, null) + lengthDelta;
+    protected int handleHeader(OutputStream out) throws IOException {
+        int addedEntriesLength = 0;
+        for (DERSequence s : newEntries) {
+            addedEntriesLength += s.getDEREncoded().length;
+        }
 
-        /* NB: The top level sequence isn't part of the signature so none of the above
-         * items should go through the signer.
-         */
-        writeTag(out, tag, tagNo, null);
-
-        /* If the algorithm signature on the original CRL doesn't match what
-         * we are using, this will not work since the signature lengths could
-         * be/will be different.  If that is the case, we're doomed right here
-         * because at this point we don't know the old signature type and signature
-         * length so we can't determine how the total length of the top level sequence
-         * will be affected.  We'll report the error when we detect the discrepancy
-         * in algorithms later.
-         */
-        writeLength(out, length, null);
+        int topTag = readTag(crlIn, null);
+        int topTagNo = readTagNumber(crlIn, topTag, null);
+        int oldTotalLength = readLength(crlIn, null);
 
         // Now we are in the TBSCertList
-        echoTag(out, null);
-        adjustLength(out, lengthDelta);
+        int tbsTag = readTag(crlIn, null);
+        int tbsTagNo = readTagNumber(crlIn, tbsTag, null);
+        int oldTbsLength = readLength(crlIn, null);
 
-        tagNo = DERTags.NULL;
+        /* We may need to adjust the overall length of the tbsCertList
+         * based on changes in the revokedCertificates sequence, so we
+         * will cache the tbsCertList data in this temporary byte stream.
+         */
+        ByteArrayOutputStream temp = new ByteArrayOutputStream();
+
+        int tagNo = DERTags.NULL;
         Date oldThisUpdate = null;
         while (true) {
-            tag = readTag(crlIn, null);
+            int tag = readTag(crlIn, null);
             tagNo = readTagNumber(crlIn, tag, null);
 
             if (tagNo == GENERALIZED_TIME || tagNo == UTC_TIME) {
-                oldThisUpdate = readAndReplaceTime(out, tagNo);
+                oldThisUpdate = readAndReplaceTime(temp, tagNo);
                 break;
             }
             else {
-                writeTag(out, tag, tagNo, signer);
-                length = echoLength(out, null);
-                echoValue(out, length, null);
+                writeTag(temp, tag, tagNo);
+                int length = echoLength(temp);
+                echoValue(temp, length);
             }
         }
 
         // Now we have to deal with the potential for an optional nextUpdate field
-        tag = readTag(crlIn, null);
+        int tag = readTag(crlIn, null);
         tagNo = readTagNumber(crlIn, tag, null);
 
         if (tagNo == DERTags.GENERALIZED_TIME || tagNo == DERTags.UTC_TIME) {
             /* It would be possible to take in a desired nextUpdate in the constructor
              * but I'm not sure if the added complexity is worth it.
              */
-            offsetNextUpdate(out, tagNo, oldThisUpdate);
-            echoTag(out, null);
+            offsetNextUpdate(temp, tagNo, oldThisUpdate);
+            echoTag(temp);
         }
         else {
-            writeTag(out, tag, tagNo, signer);
+            writeTag(temp, tag, tagNo);
         }
 
-        length = adjustLength(out, lengthDelta);
-        int originalLength = length - lengthDelta;
+        /* Much like throwing a stone into a pond, as one sequence increases in
+         * length the change can ripple out to parent sequences as more bytes are
+         * required to encode the length.  For example, if we have a tbsCertList of
+         * size 250 and a revokedCertificates list of size 100, the revokedCertificates
+         * list size could increase by 6 with no change in the length bytes its sequence
+         * requires.  However, 250 + 6 extra bytes equals a total length of 256 which
+         * requires 2 bytes to encode instead of 1, thus changing the total length
+         * of the CertificateList sequence.
+         *
+         * We account for these ripples with the xxxHeaderBytesDelta variables.
+         */
+        int revokedCertsLengthDelta = addedEntriesLength - deletedEntriesLength;
+        int oldRevokedCertsLength = readLength(crlIn, null);
+        int newRevokedCertsLength = oldRevokedCertsLength + revokedCertsLengthDelta;
+        int revokedCertsHeaderBytesDelta = findHeaderBytesDelta(oldRevokedCertsLength, newRevokedCertsLength);
 
-        return originalLength;
+        int tbsCertListLengthDelta = revokedCertsLengthDelta +
+            crlNumberHeaderBytesDelta +
+            revokedCertsHeaderBytesDelta;
+        int newTbsLength = oldTbsLength + tbsCertListLengthDelta;
+        int tbsHeaderBytesDelta = findHeaderBytesDelta(oldTbsLength, newTbsLength);
+
+        int totalLengthDelta = tbsCertListLengthDelta + tbsHeaderBytesDelta;
+        int newTotalLength = oldTotalLength + totalLengthDelta;
+
+        /* NB: The top level sequence isn't part of the signature so its tag and
+         * length do not go through the signer.
+         */
+        writeTag(out, topTag, topTagNo);
+        writeLength(out, newTotalLength);
+
+        writeTag(out, tbsTag, tbsTagNo, signer);
+        writeLength(out, newTbsLength, signer);
+
+        byte[] header = temp.toByteArray();
+        temp.close();
+        out.write(header);
+        signer.update(header, 0, header.length);
+
+        writeLength(out, newRevokedCertsLength, signer);
+        return oldRevokedCertsLength;
     }
 
     /**
@@ -441,6 +619,14 @@ public class X509CRLStreamWriter {
         return new Time(oldTime).getDate();
     }
 
+    /**
+     * Write a UTCTime or GeneralizedTime to an output stream.
+     *
+     * @param out
+     * @param newTime
+     * @param originalLength
+     * @throws IOException
+     */
     protected void writeNewTime(OutputStream out, DERObject newTime, int originalLength)
         throws IOException {
         byte[] newEncodedTime = newTime.getDEREncoded();
@@ -464,32 +650,96 @@ public class X509CRLStreamWriter {
             IOUtils.closeQuietly(timeIn);
         }
 
-        writeDER(out, newEncodedTime, signer);
+        writeDER(out, newEncodedTime);
     }
 
+    /**
+     * Echo tag without tracking and without signing.
+     *
+     * @param out
+     * @return tag value
+     * @throws IOException
+     */
+    protected int echoTag(OutputStream out) throws IOException {
+        return echoTag(out, null, null);
+    }
+
+    /**
+     * Echo tag and sign with existing RSADigestSigner.
+     *
+     * @param out
+     * @param i optional value to increment by the number of bytes read
+     * @return tag value
+     * @throws IOException
+     */
     protected int echoTag(OutputStream out, AtomicInteger i) throws IOException {
+        return echoTag(out, i, signer);
+    }
+
+    protected int echoTag(OutputStream out, AtomicInteger i, RSADigestSigner s) throws IOException {
         int tag = readTag(crlIn, i);
         int tagNo = readTagNumber(crlIn, tag, i);
-        writeTag(out, tag, tagNo, signer);
+        writeTag(out, tag, tagNo, s);
         return tagNo;
     }
 
+    /**
+     * Echo length without tracking and without signing.
+     *
+     * @param out
+     * @return length value
+     * @throws IOException
+     */
+    protected int echoLength(OutputStream out) throws IOException {
+        return echoLength(out, null, null);
+    }
+
+    /**
+     * Echo length and sign with existing RSADigestSigner.
+     *
+     * @param out
+     * @param i optional value to increment by the number of bytes read
+     * @return length value
+     * @throws IOException
+     */
     protected int echoLength(OutputStream out, AtomicInteger i) throws IOException {
+        return echoLength(out, i, signer);
+    }
+
+    protected int echoLength(OutputStream out, AtomicInteger i, RSADigestSigner s) throws IOException {
         int length = readLength(crlIn, i);
-        writeLength(out, length, signer);
+        writeLength(out, length, s);
         return length;
     }
 
-    protected int adjustLength(OutputStream out, int lengthDelta) throws IOException {
-        int length = readLength(crlIn, null) + lengthDelta;
-        writeLength(out, length, signer);
-        return length;
+    /**
+     * Echo value without tracking and without signing.
+     *
+     * @param out
+     * @param length
+     * @throws IOException
+     */
+    protected void echoValue(OutputStream out, int length) throws IOException {
+        echoValue(out, length, null, null);
     }
 
+    /**
+     * Echo value and sign with existing RSADigestSigner.
+     *
+     * @param out
+     * @param length
+     * @param i optional value to increment by the number of bytes read
+     * @throws IOException
+     */
     protected void echoValue(OutputStream out, int length, AtomicInteger i) throws IOException {
+        echoValue(out, length, i, signer);
+    }
+
+    protected void echoValue(OutputStream out, int length, AtomicInteger i, RSADigestSigner s)
+        throws IOException {
         byte[] item = new byte[length];
         readFullyAndTrack(crlIn, item, i);
-        writeValue(out, item, signer);
+        writeValue(out, item, s);
     }
 
     protected static Digest createDigest(AlgorithmIdentifier digAlg) throws CryptoException {
