@@ -76,7 +76,7 @@ public class CRLWriteBenchmark {
         try {
             X509CRLStreamWriter stream = new X509CRLStreamWriter(crlFile, key);
             stream.add(new BigInteger("25000000000"), new Date(), CRLReason.unspecified);
-            stream.lock();
+            stream.preScan(crlFile).lock();
 
             File newCrlFile = File.createTempFile("new_crl", ".der");
             out = new BufferedOutputStream(new FileOutputStream(newCrlFile));
