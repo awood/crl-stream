@@ -185,9 +185,10 @@ public class X509CRLEntryStream implements Closeable, Iterator<X509CRLEntryObjec
             ByteArrayOutputStream reconstructed = new ByteArrayOutputStream();
             // An ASN1 SEQUENCE tag is 0x30
             reconstructed.write(0x30);
-            reconstructed.write(entryLength);
+            writeLength(reconstructed, entryLength);
             reconstructed.write(entry);
             DERSequence obj = (DERSequence) DERSequence.fromByteArray(reconstructed.toByteArray());
+            reconstructed.close();
 
             CRLEntry crlEntry = new CRLEntry(obj);
 
