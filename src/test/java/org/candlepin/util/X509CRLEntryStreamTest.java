@@ -103,6 +103,7 @@ public class X509CRLEntryStreamTest {
             assertEquals(referenceSerials, streamedSerials);
         }
         finally {
+            referenceStream.close();
             stream.close();
         }
     }
@@ -165,6 +166,7 @@ public class X509CRLEntryStreamTest {
             assertEquals(referenceSerials, streamedSerials);
         }
         finally {
+            referenceStream.close();
             stream.close();
         }
     }
