@@ -51,7 +51,6 @@ import org.bouncycastle.crypto.params.RSAKeyParameters;
 import org.bouncycastle.crypto.signers.RSADigestSigner;
 import org.bouncycastle.jce.provider.X509CRLEntryObject;
 import org.bouncycastle.operator.DefaultDigestAlgorithmIdentifierFinder;
-import org.bouncycastle.operator.DefaultSignatureAlgorithmIdentifierFinder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -66,6 +65,7 @@ import java.io.OutputStream;
 import java.math.BigInteger;
 import java.security.cert.CRLException;
 import java.security.interfaces.RSAPrivateKey;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.Enumeration;
 import java.util.HashSet;
@@ -117,7 +117,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class X509CRLStreamWriter {
     public static final Logger log = LoggerFactory.getLogger(X509CRLStreamWriter.class);
 
-    public static final String DEFAULT_ALGORITHM = "SHA256withRSA";
     private boolean locked = false;
     private boolean preScanned = false;
 
@@ -134,26 +133,19 @@ public class X509CRLStreamWriter {
 
     private int deletedEntriesLength;
     private RSADigestSigner signer;
+    private RSAPrivateKey key;
     private DERInteger newCrlNumber;
     private int crlNumberHeaderBytesDelta;
 
+    private int newSigLength;
+    private int oldSigLength;
+
     public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key)
         throws CryptoException, IOException {
-        this(crlToChange, key, DEFAULT_ALGORITHM);
-    }
-
-    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key, String alorithmName)
-        throws CryptoException, IOException {
-        this(new BufferedInputStream(new FileInputStream(crlToChange)), key,
-            alorithmName);
+        this(new BufferedInputStream(new FileInputStream(crlToChange)), key);
     }
 
     public X509CRLStreamWriter(InputStream crlToChange, RSAPrivateKey key)
-        throws CryptoException, IOException {
-        this(crlToChange, key, DEFAULT_ALGORITHM);
-    }
-
-    public X509CRLStreamWriter(InputStream crlToChange, RSAPrivateKey key, String algorithmName)
         throws CryptoException, IOException {
         this.deletedEntries = new HashSet<BigInteger>();
         this.deletedEntriesLength = 0;
@@ -161,17 +153,24 @@ public class X509CRLStreamWriter {
         this.newEntries = new LinkedList<DERSequence>();
         this.crlIn = crlToChange;
 
-        if (!algorithmName.contains("RSA")) {
-            throw new IllegalArgumentException("This class is only compatible with RSA signing.");
-        }
-        this.signingAlg = new DefaultSignatureAlgorithmIdentifierFinder().find(algorithmName);
-        this.digestAlg = new DefaultDigestAlgorithmIdentifierFinder().find(signingAlg);
-
-        // Build the digest
-        this.signer = new RSADigestSigner(createDigest(digestAlg));
-        signer.init(true, new RSAKeyParameters(true, key.getModulus(), key.getPrivateExponent()));
-
         this.count = new AtomicInteger();
+
+        /* The length of an RSA signature is padded out to the length of the modulus
+         * in bytes.  See http://stackoverflow.com/questions/6658728/rsa-signature-size
+         *
+         * If the original CRL was signed with a 2048 bit key and someone sends in a
+         * 4096 bit key, we need to account for the discrepancy.
+         */
+        int newSigBytes = key.getModulus().bitLength() / 8;
+
+        /* Now we need a byte array to figure out how long the new signature will
+         * be when encoded.
+         */
+        byte[] dummySig = new byte[newSigBytes];
+        Arrays.fill(dummySig, (byte) 0x00);
+        this.newSigLength = new DERBitString(dummySig).getDEREncoded().length;
+
+        this.key = key;
     }
 
     public X509CRLStreamWriter preScan(File crlToChange) throws IOException {
@@ -203,12 +202,17 @@ public class X509CRLStreamWriter {
 
         try {
             reaperStream = new X509CRLEntryStream(crlToChange);
-            while (reaperStream.hasNext()) {
-                X509CRLEntryObject entry = reaperStream.next();
-                if (validator != null && validator.shouldDelete(entry)) {
-                    deletedEntries.add(entry.getSerialNumber());
-                    deletedEntriesLength += entry.getEncoded().length;
+            try {
+                while (reaperStream.hasNext()) {
+                    X509CRLEntryObject entry = reaperStream.next();
+                    if (validator != null && validator.shouldDelete(entry)) {
+                        deletedEntries.add(entry.getSerialNumber());
+                        deletedEntriesLength += entry.getEncoded().length;
+                    }
                 }
+            }
+            catch (CRLException e) {
+                throw new IOException("Could not read CRL entry", e);
             }
 
             /* At this point, crlToChange is at the point where the crlExtensions would
@@ -221,8 +225,26 @@ public class X509CRLStreamWriter {
             asn1In = new ASN1InputStream(crlToChange);
             while ((o = asn1In.readObject()) != null) {
                 if (o instanceof DERSequence) {
-                    // This means we are at the signature
-                    break;
+                    // Now we are at the signatureAlgorithm
+                    DERSequence seq = (DERSequence) o;
+                    if (seq.getObjectAt(0) instanceof DERObjectIdentifier) {
+                        signingAlg = new AlgorithmIdentifier(seq);
+                        digestAlg = new DefaultDigestAlgorithmIdentifierFinder().find(signingAlg);
+
+                        try {
+                            // Build the signer
+                            this.signer = new RSADigestSigner(createDigest(digestAlg));
+                            signer.init(true, new RSAKeyParameters(
+                                true, key.getModulus(), key.getPrivateExponent()));
+                        }
+                        catch (CryptoException e) {
+                            throw new IOException(
+                                "Could not create RSADigest signer for " + digestAlg.getAlgorithm());
+                        }
+                    }
+                }
+                else if (o instanceof DERBitString) {
+                    oldSigLength = o.getDEREncoded().length;
                 }
                 else {
                     if (extensions != null) {
@@ -263,9 +285,6 @@ public class X509CRLStreamWriter {
                     break;
                 }
             }
-        }
-        catch (CRLException e) {
-            throw new IOException("Could not read CRL entry", e);
         }
         finally {
             if (reaperStream != null) {
@@ -352,15 +371,13 @@ public class X509CRLStreamWriter {
 
             DERInteger serial = (DERInteger) DERInteger.fromByteArray(entryBytes);
 
-            if (!deletedEntries.contains(serial.getValue())) {
+            if (deletedEntriesLength == 0 || !deletedEntries.contains(serial.getValue())) {
                 writeTag(out, tag, tagNo, signer);
                 writeLength(out, length, signer);
                 writeValue(out, entryBytes, signer);
             }
         }
 
-        /* Read SignatureAlgorithm on old CRL and throw an exception if it doesn't
-         * match expectations. */
         ASN1InputStream asn1In = null;
         byte[] extensions = null;
         try {
@@ -369,18 +386,7 @@ public class X509CRLStreamWriter {
             DERObject o;
             while ((o = asn1In.readObject()) != null) {
                 if (o instanceof DERSequence) {
-                    DERSequence seq = (DERSequence) o;
-                    if (seq.getObjectAt(0) instanceof DERObjectIdentifier) {
-                        AlgorithmIdentifier referenceAlgId = new AlgorithmIdentifier(seq);
-
-                        if (!referenceAlgId.equals(signingAlg)) {
-                            throw new IllegalStateException(
-                                "Signing algorithm mismatch.  This will result in an encoding error! " +
-                                "Got " + referenceAlgId.getAlgorithm() + " but expected " +
-                                signingAlg.getAlgorithm());
-                        }
-                    }
-                    // Don't want to write the actual old signature!
+                    // Don't care about the old signatureAlorithm or signatureValue at this point
                     break;
                 }
                 else {
@@ -527,7 +533,11 @@ public class X509CRLStreamWriter {
         int newTbsLength = oldTbsLength + tbsCertListLengthDelta;
         int tbsHeaderBytesDelta = findHeaderBytesDelta(oldTbsLength, newTbsLength);
 
-        int totalLengthDelta = tbsCertListLengthDelta + tbsHeaderBytesDelta;
+        // Since the signature is in the top level sequence, we don't need to
+        // calculate the header bytes delta.
+        int sigLengthDelta = newSigLength - oldSigLength;
+
+        int totalLengthDelta = tbsCertListLengthDelta + tbsHeaderBytesDelta + sigLengthDelta;
         int newTotalLength = oldTotalLength + totalLengthDelta;
 
         /* NB: The top level sequence isn't part of the signature so its tag and
