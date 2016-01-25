@@ -403,7 +403,7 @@ public class X509CRLStreamWriter {
 
         // Write the new entries into the new CRL
         for (DERSequence entry : newEntries) {
-            writeDER(out, entry.getDEREncoded(), signer);
+            writeBytes(out, entry.getDEREncoded(), signer);
         }
 
         // Copy the old extensions over
@@ -660,7 +660,7 @@ public class X509CRLStreamWriter {
             IOUtils.closeQuietly(timeIn);
         }
 
-        writeDER(out, newEncodedTime);
+        writeBytes(out, newEncodedTime);
     }
 
     /**

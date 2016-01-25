@@ -287,15 +287,17 @@ public class DERUtil {
         }
     }
 
+    /* The writeValue() methods are just aliases to writeBytes, but there is a semantic
+     * difference in their usage.  writeValue is meant to be used to write the value portion
+     * of a ASN1 tag-length-value.  writeBytes is used to write arbitrary bytes and
+     * is mostly used to write an entire TLV.
+     */
     public static void writeValue(OutputStream out, byte[] value) throws IOException {
-        writeValue(out, value, null);
+        writeBytes(out, value, null);
     }
 
     public static void writeValue(OutputStream out, byte[] value, Signer signer) throws IOException {
-        out.write(value);
-        if (signer != null) {
-            signer.update(value, 0, value.length);
-        }
+        writeBytes(out, value, signer);
     }
 
     public static int rebuildTag(int tag, int tagNo) {
@@ -307,14 +309,14 @@ public class DERUtil {
         return tag;
     }
 
-    public static void writeDER(OutputStream out, byte[] der) throws IOException {
-        writeDER(out, der, null);
+    public static void writeBytes(OutputStream out, byte[] value) throws IOException {
+        writeBytes(out, value, null);
     }
 
-    public static void writeDER(OutputStream out, byte[] der, Signer signer) throws IOException {
-        out.write(der);
+    public static void writeBytes(OutputStream out, byte[] value, Signer signer) throws IOException {
+        out.write(value);
         if (signer != null) {
-            signer.update(der, 0, der.length);
+            signer.update(value, 0, value.length);
         }
     }
 }

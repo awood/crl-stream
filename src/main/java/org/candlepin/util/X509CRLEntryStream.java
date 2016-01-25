@@ -88,7 +88,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class X509CRLEntryStream implements Closeable, Iterator<X509CRLEntryObject> {
     private InputStream crlStream;
 
-    // TODO should be a BigInteger?  Apparently long definite lengths can go up to 2^1008 - 1
+    /* Long definite lengths can go up to 2^1008 - 1.  Integers max out at 2.1 billion
+     * which translates to about 2GB.  A CRL with around 1.5 million entries is about 90MB
+     * so if we end up with any sequences over 2GB, we are in real trouble. */
     private Integer revokedSeqBytes;
     private AtomicInteger count;
 
