@@ -58,6 +58,7 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.cert.X509CRL;
 import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
 import java.util.Date;
 import java.util.concurrent.TimeUnit;
 
@@ -66,7 +67,7 @@ import java.util.concurrent.TimeUnit;
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 public class CRLWriteBenchmark {
     private File crlFile;
-    private RSAPrivateKey key;
+    private KeyPair keyPair;
     private X500Name issuer;
     private BouncyCastleProvider bc;
     private ContentSigner signer;
@@ -77,7 +78,8 @@ public class CRLWriteBenchmark {
     public void stream() {
         OutputStream out = null;
         try {
-            X509CRLStreamWriter stream = new X509CRLStreamWriter(crlFile, key);
+            X509CRLStreamWriter stream = new X509CRLStreamWriter(crlFile,
+                (RSAPrivateKey) keyPair.getPrivate(), (RSAPublicKey) keyPair.getPublic());
             stream.add(new BigInteger("25000000000"), new Date(), CRLReason.unspecified);
             stream.preScan(crlFile).lock();
 
@@ -181,8 +183,7 @@ public class CRLWriteBenchmark {
         KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
 
         generator.initialize(2048);
-        KeyPair keyPair = generator.generateKeyPair();
-        key = (RSAPrivateKey) keyPair.getPrivate();
+        keyPair = generator.generateKeyPair();
     }
 
     @TearDown(Level.Trial)
