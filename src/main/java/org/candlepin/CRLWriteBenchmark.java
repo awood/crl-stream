@@ -88,10 +88,7 @@ public class CRLWriteBenchmark {
             stream.write(out);
             System.out.println("\nWrote new crl to " + newCrlFile.getAbsolutePath());
         }
-        catch (IOException e) {
-            e.printStackTrace();
-        }
-        catch (CryptoException e) {
+        catch (Exception e) {
             e.printStackTrace();
         }
         finally {

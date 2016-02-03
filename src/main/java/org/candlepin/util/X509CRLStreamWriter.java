@@ -74,6 +74,8 @@ import java.io.OutputStream;
 import java.math.BigInteger;
 import java.security.InvalidKeyException;
 import java.security.cert.CRLException;
+import java.security.cert.CertificateParsingException;
+import java.security.cert.X509Certificate;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.util.Arrays;
@@ -145,7 +147,7 @@ public class X509CRLStreamWriter {
     private int deletedEntriesLength;
     private RSADigestSigner signer;
     private RSAPrivateKey key;
-    private RSAPublicKey pubKey;
+    private AuthorityKeyIdentifierStructure akiStructure;
 
     private int newSigLength;
     private int oldSigLength;
@@ -155,12 +157,29 @@ public class X509CRLStreamWriter {
     private int extensionsDelta;
     private byte[] newExtensions;
 
+    public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key, X509Certificate ca)
+        throws CryptoException, IOException, CertificateParsingException {
+        this(new BufferedInputStream(new FileInputStream(crlToChange)), key, ca);
+    }
+
+    public X509CRLStreamWriter(InputStream crlToChange, RSAPrivateKey key, X509Certificate ca)
+        throws CryptoException, IOException, CertificateParsingException {
+        this(crlToChange, key, new AuthorityKeyIdentifierStructure(ca));
+    }
+
+
     public X509CRLStreamWriter(File crlToChange, RSAPrivateKey key, RSAPublicKey pubKey)
-        throws CryptoException, IOException {
+        throws CryptoException, IOException, InvalidKeyException {
         this(new BufferedInputStream(new FileInputStream(crlToChange)), key, pubKey);
     }
 
     public X509CRLStreamWriter(InputStream crlToChange, RSAPrivateKey key, RSAPublicKey pubKey)
+        throws CryptoException, IOException, InvalidKeyException {
+        this(crlToChange, key, new AuthorityKeyIdentifierStructure(pubKey));
+    }
+
+    public X509CRLStreamWriter(InputStream crlToChange,
+        RSAPrivateKey key, AuthorityKeyIdentifierStructure akiStructure)
         throws CryptoException, IOException {
         this.deletedEntries = new HashSet<BigInteger>();
         this.deletedEntriesLength = 0;
@@ -186,7 +205,7 @@ public class X509CRLStreamWriter {
         this.newSigLength = new DERBitString(dummySig).getDEREncoded().length;
 
         this.key = key;
-        this.pubKey = pubKey;
+        this.akiStructure = akiStructure;
     }
 
     public X509CRLStreamWriter preScan(File crlToChange) throws IOException {
@@ -541,20 +560,13 @@ public class X509CRLStreamWriter {
                 modifiedExts.add(new DERSequence(crlNumber));
             }
             else if (X509Extension.authorityKeyIdentifier.equals(oid)) {
-                try {
-                    AuthorityKeyIdentifierStructure structure = new AuthorityKeyIdentifierStructure(
-                        pubKey);
-                    X509Extension newAuthorityKeyExt =
-                        new X509Extension(false, new DEROctetString(structure.getDEREncoded()));
+                X509Extension newAuthorityKeyExt =
+                    new X509Extension(false, new DEROctetString(akiStructure.getDEREncoded()));
 
-                    ASN1EncodableVector aki = new ASN1EncodableVector();
-                    aki.add(X509Extension.authorityKeyIdentifier);
-                    aki.add(newAuthorityKeyExt.getValue());
-                    modifiedExts.add(new DERSequence(aki));
-                }
-                catch (InvalidKeyException e) {
-                    throw new IOException("Could not write new AuthorityKeyIdentifier", e);
-                }
+                ASN1EncodableVector aki = new ASN1EncodableVector();
+                aki.add(X509Extension.authorityKeyIdentifier);
+                aki.add(newAuthorityKeyExt.getValue());
+                modifiedExts.add(new DERSequence(aki));
             }
             else {
                 modifiedExts.add(ext);
