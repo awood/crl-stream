@@ -406,7 +406,7 @@ public class X509CRLStreamWriter {
                     X509Extension reasonExt = extensions.getExtension(X509Extension.reasonCode);
 
                     if (reasonExt != null) {
-                        reason = ((DEREnumerated) reasonExt.getParsedValue()).getValue().intValueExact();
+                        reason = ((DEREnumerated) reasonExt.getParsedValue()).getValue().intValue();
                     }
                 }
                 crlBuilder.addCRLEntry(serial, revokeDate, reason);

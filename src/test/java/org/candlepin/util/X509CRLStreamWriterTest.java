@@ -128,7 +128,7 @@ public class X509CRLStreamWriterTest {
         InputStream changedStream = new BufferedInputStream(new FileInputStream(outfile));
         CertificateFactory cf = CertificateFactory.getInstance("X.509");
         X509CRL changedCrl = (X509CRL) cf.generateCRL(changedStream);
-        changedCrl.verify(signatureKey, BC);
+        changedCrl.verify(signatureKey, BC.PROVIDER_NAME);
 
         return changedCrl;
     }
