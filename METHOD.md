@@ -389,10 +389,12 @@ when iterating through the extensions, we find OID 2.5.29.35, then replace the
 next TLV with the public key passed in during initialization encoded as an
 AuthorityKeyIdentifier according to RFC specifications.
 
-Store the modified extensions as `newExtensions` and calculate the entire
+Store the modified extensions in DER as `newExtensions` and calculate the entire
 difference in length using the formula `newExtensions.length -
-oldExtensions.length + findHeaderBytesDelta(oldExtensions, newExtensions)` and
-store the result as `extensionsDelta`.
+oldExtensions.length` and store the result as `extensionsDelta`.  Since both
+`newExtensions` and `oldExtensions` are DER encoded, there is no need to run
+`findHeaderBytesDelta` on the two since the difference in the DER encoded
+lengths already accounts for the difference in the header bytes.
 
 The first pass is now complete.  We have gathered four pieces of information:
 the total number of bytes we plan on removing due to deleted entries, the DER
