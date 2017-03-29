@@ -270,8 +270,8 @@ decode what we wrote.  They will end up reading an incorrect number of bytes for
 the value portion of the TLV.  The parser would then end up trying to read in
 another TLV at an incorrect position and will invariably fail.
 
-Imagine a script where the character's name is followed by the number of lines
-they will speak.
+Imagine a script where the character's name, the T, is followed by the number of
+lines they will speak, the L, and the lines themselves are the V.
 
     HORATIO: 1 lines
         Hail to your lordship!
@@ -288,11 +288,12 @@ Now imagine we inadvertently change the first direction to read "3 lines"
 instead of "1 line".  Our literal-minded actors would speak the following
 dialog:
 
-    "Hail to your lordship!  Hamlet 2 lines.  I am glad to see you well:"
-    "Horatio"
+    <Horation>: "Hail to your lordship!  Hamlet 2 lines.  I am glad to see you well:"
+    <Horatio>:
 
-And then our second actor stops because "--or I do forget myself" can't be
-interpreted as a number of lines to read.
+And then our actor playing Horatio stops because while "Horatio" is a valid T,
+"--or I do forget myself" can't be interpreted as a number of lines to read (an
+L).
 
 This analogy illustrates the problem with an incorrect length in a single TLV.
 However, our TLVs can contain other TLVs by using the ASN1 sequence type much
