@@ -18,19 +18,20 @@ import org.candlepin.util.X509CRLStreamWriter;
 
 import org.apache.commons.io.FileUtils;
 import org.bouncycastle.asn1.ASN1InputStream;
-import org.bouncycastle.asn1.DERObject;
+import org.bouncycastle.asn1.ASN1Primitive;
 import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.asn1.x509.AuthorityKeyIdentifier;
 import org.bouncycastle.asn1.x509.CRLNumber;
 import org.bouncycastle.asn1.x509.CRLReason;
+import org.bouncycastle.asn1.x509.Extension;
 import org.bouncycastle.asn1.x509.X509Extension;
 import org.bouncycastle.cert.X509CRLHolder;
 import org.bouncycastle.cert.X509v2CRLBuilder;
 import org.bouncycastle.cert.jcajce.JcaX509CRLConverter;
-import org.bouncycastle.crypto.CryptoException;
+import org.bouncycastle.cert.jcajce.JcaX509ExtensionUtils;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
-import org.bouncycastle.x509.extension.AuthorityKeyIdentifierStructure;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -110,9 +111,9 @@ public class CRLWriteBenchmark {
         ASN1InputStream stream = null;
         try {
             stream = new ASN1InputStream(new BufferedInputStream(new FileInputStream(crlFile)));
-            DERObject o = stream.readObject();
+            ASN1Primitive o = stream.readObject();
 
-            X509CRLHolder oldCrl = new X509CRLHolder(o.getDEREncoded());
+            X509CRLHolder oldCrl = new X509CRLHolder(o.getEncoded());
 
             X509v2CRLBuilder crlBuilder = new X509v2CRLBuilder(issuer, new Date());
             crlBuilder.addCRL(oldCrl);
@@ -156,8 +157,9 @@ public class CRLWriteBenchmark {
             .build(keyPair.getPrivate());
 
         X509v2CRLBuilder crlBuilder = new X509v2CRLBuilder(issuer, new Date());
-        crlBuilder.addExtension(X509Extension.authorityKeyIdentifier, false,
-            new AuthorityKeyIdentifierStructure(keyPair.getPublic()));
+        AuthorityKeyIdentifier identifier = new JcaX509ExtensionUtils().createAuthorityKeyIdentifier
+            (keyPair.getPublic());
+        crlBuilder.addExtension(Extension.authorityKeyIdentifier, false, identifier);
         /* With a CRL number of 127, incrementing it should cause the number of bytes in the length
          * portion of the TLV to increase by one.*/
         crlBuilder.addExtension(X509Extension.cRLNumber, false, new CRLNumber(new BigInteger("127")));
