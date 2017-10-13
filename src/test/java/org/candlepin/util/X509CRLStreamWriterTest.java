@@ -712,10 +712,10 @@ public class X509CRLStreamWriterTest {
     }
 
     @Test
-    public void testSha1Signature() throws Exception {
+    public void testUpgradesSignature() throws Exception {
         X509v2CRLBuilder crlBuilder = createCRLBuilder();
 
-        String signingAlg = "SHA1WithRSAEncryption";
+        String signingAlg = "SHA1WithRSA";
         ContentSigner sha1Signer = new JcaContentSignerBuilder(signingAlg)
             .setProvider(BC_PROVIDER)
             .build(keyPair.getPrivate());
@@ -726,6 +726,7 @@ public class X509CRLStreamWriterTest {
 
         X509CRLStreamWriter stream = new X509CRLStreamWriter(crlToChange,
             (RSAPrivateKey) keyPair.getPrivate(), (RSAPublicKey) keyPair.getPublic());
+        stream.setSigningAlgorithm("SHA256WithRSA");
         stream.add(new BigInteger("9000"), new Date(), 0);
         stream.preScan(crlToChange).lock();
         OutputStream o = new BufferedOutputStream(new FileOutputStream(outfile));
