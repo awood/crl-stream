@@ -331,6 +331,12 @@ length of the resulting dummy signature and store that as `newSigLength`.  We
 will retain the public key to insert into the AuthorityKeyIdentifier extension
 that is required by RFC 5280 for version 2 CRLs.
 
+The signature is also affected by the algorithm used to compute the digest, e.g.
+SHA1 or SHA256.  Usage of SHA1 is discouraged so we should allow users to
+upgrade if they wish.  After creating the writer instance but before starting
+the streaming process, the user is allowed to select which digest algorithm they
+want to use for the hasher.
+
 Our modifications can include either additions of revoked certificate entries or
 deletions of existing entries where the certificate has reached its expiration
 data and will thus never be valid in any circumstance.
@@ -370,8 +376,9 @@ If the TLV has a tag number indicating it is a sequence, we have reached the
 *signatureAlgorithm* sequence.  Read the sequence TLV and store it as
 `signingAlg`.  Then read the TLVs within `signingAlg`.  The first sequence item
 is the most important and corresponds to an OID.  We compare the OID we read
-against a reference list.  Each OID corresponds to a particular hasher and
-signer.  Based on the OID, we construct the appropriate hasher and signer.
+against a reference list.  Each OID corresponds to a particular digest and
+signing algorithm.  Based on the OID, we construct the appropriate hasher and
+signer; unless the digest type has already been specified during construction.
 
 Ultimately, we will reach the *signatureValue* TLV.  We read that TLV and store
 the number of bytes as `oldSigLength`.
@@ -412,14 +419,22 @@ input stream for the CRL and perform the following procedure:
    as `tbsTag` and `oldTbsLength`.
 3. Read the tag, length, and value for the initial entries of the *tbsCertList*
    storing in `tempOutput` as we go.
-4. When we read a tag with a tag number of type GeneralizedTime or UTCTime, we
+4. When we reach the first Sequence tag, we have reached the
+   *signatureAlgorithm* field and we may need to update it with a new signing
+   algorithm given by the user.
+5. Read the length and value.  Store the value as `oldAlg`.  Based on the
+   signing algorithm given in the CRL or given by the user, construct a ASN1
+   sequence conforming to the AlgorithmIdentifier specification given in RFC
+   5280.  Encode it to DER and write it to `tempOutput`.
+
+6. When we read a tag with a tag number of type GeneralizedTime or UTCTime, we
    have reached the *thisUpdate* field.  Since we are updating the CRL, we need
    to update this value.
-5. Read the length and value.  Store the value as `oldThisUpdate`.  Based on the
+7. Read the length and value.  Store the value as `oldThisUpdate`.  Based on the
    tag number construct a new GeneralizedTime or UTCTime with an appropriate
    time (such as the current time) and encode it to DER.  Store the new DER for
    *thisUpdate* in `tempOutput`.
-6. Potentially, we are now at the *nextUpdate* field.  It would be possible to
+8. Potentially, we are now at the *nextUpdate* field.  It would be possible to
    allow callers to specify this value, but instead I elected to set it to the
    new *thisUpdate* time plus the difference between the old *thisUpdate* and
    the old *nextUpdate*.  Read the tag and store it in `tempOuput`.  If its tag
@@ -429,10 +444,10 @@ input stream for the CRL and perform the following procedure:
    difference to the current time and encode that time in DER as the same type
    (GeneralizedTime or UTCTime) used originally.  Write the new *nextUpdate* to
    `tempOutput`.  Read the next tag and store it to `tempOutput`.
-7. We are now at the *revokedCertificates*.  Read the tag and length.  Store the
+9. We are now at the *revokedCertificates*.  Read the tag and length.  Store the
    length as `oldRevokedCertsLength`.  Our stream is now at the start of the
    first *revokedCertificates* entry.
-8. Pause the reading for a moment to adjust the preceding sequence lengths:
+10. Pause the reading for a moment to adjust the preceding sequence lengths:
     * `newRevokedCertsLength = addedEntriesLength - deletedEntriesLength +
       oldRevokedCertsLength`
     * `revokedCertsHeaderBytesDelta =
@@ -445,7 +460,7 @@ input stream for the CRL and perform the following procedure:
     * `totalLengthDelta = tbsCertListLengthDelta + tbsHeaderBytesDelta +
       sigLengthDelta`
     * `newTotalLength = oldTotalLength + totalLengthDelta`
-9. Having calculated the length changes for *revokedCertificates*, *tbsCertList*
+11. Having calculated the length changes for *revokedCertificates*, *tbsCertList*
    and *CertificateList*, we can begin to write the new DER to the output.
     * Write `topTag`.
     * DER encode and write `newTotalLength`.
@@ -455,16 +470,16 @@ input stream for the CRL and perform the following procedure:
     * Write the contents of `tempOutput` and send the them to the signer.
     * DER encode `newRevokedCertsLength`.  Write the result and send it
       to the signer.
-10. Begin reading the TLVs for each *revokedCertificates* entry from the stream.
+12. Begin reading the TLVs for each *revokedCertificates* entry from the stream.
     At each read, we will decrement `oldRevokedCertsLength` by the number of
     bytes we have read.  If the entry we read has a serial that we were asked to
     delete, drop the entire entry.  Otherwise, write the TLV to the output and
     send it to the signer.
-11. Once `oldRevokedCertsLength` has been reduced to zero, write each entry in
+13. Once `oldRevokedCertsLength` has been reduced to zero, write each entry in
     `newEntries` to the output and send each to the signer.
-12. Write `newExtensions` to the output and send it to the signer.
-13. Write `signingAlg` to the output.
-14. Ask the signer to generate a signature.  Encode that signature as a BIT
+14. Write `newExtensions` to the output and send it to the signer.
+15. Write `signingAlg` to the output.
+16. Ask the signer to generate a signature.  Encode that signature as a BIT
     STRING and write to the output.
 
 ### The Degenerate Case
