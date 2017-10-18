@@ -18,16 +18,16 @@ import org.candlepin.util.X509CRLEntryStream;
 
 import org.apache.commons.io.FileUtils;
 import org.bouncycastle.asn1.x500.X500Name;
+import org.bouncycastle.asn1.x509.AuthorityKeyIdentifier;
 import org.bouncycastle.asn1.x509.CRLNumber;
 import org.bouncycastle.asn1.x509.CRLReason;
-import org.bouncycastle.asn1.x509.X509Extension;
+import org.bouncycastle.asn1.x509.Extension;
 import org.bouncycastle.cert.X509CRLHolder;
 import org.bouncycastle.cert.X509v2CRLBuilder;
 import org.bouncycastle.cert.jcajce.JcaX509CRLConverter;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
+import org.bouncycastle.jcajce.provider.BouncyCastleFipsProvider;
 import org.bouncycastle.operator.ContentSigner;
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder;
-import org.bouncycastle.x509.extension.AuthorityKeyIdentifierStructure;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -76,7 +76,8 @@ public class CRLBenchmark {
 
             stream = new X509CRLEntryStream(crlFile);
             while (stream.hasNext()) {
-                l.add(stream.next().getSerialNumber());
+                // Add the serial number
+                l.add(stream.next().getUserCertificate().getValue());
             }
 
             if (!"1999999".equals(l.get(1999999).toString())) {
@@ -147,18 +148,18 @@ public class CRLBenchmark {
         generator.initialize(2048);
         KeyPair keyPair = generator.generateKeyPair();
 
-        Provider bc = new BouncyCastleProvider();
+        Provider bc = new BouncyCastleFipsProvider();
         ContentSigner signer = new JcaContentSignerBuilder("SHA256WithRSAEncryption")
             .setProvider(bc)
             .build(keyPair.getPrivate());
 
         X509v2CRLBuilder crlBuilder = new X509v2CRLBuilder(issuer, new Date());
 
-        crlBuilder.addExtension(X509Extension.authorityKeyIdentifier, false,
-            new AuthorityKeyIdentifierStructure(keyPair.getPublic()));
+        crlBuilder.addExtension(Extension.authorityKeyIdentifier, false,
+            AuthorityKeyIdentifier.getInstance(keyPair.getPublic()));
         /* With a CRL number of 127, incrementing it should cause the number of bytes in the length
          * portion of the TLV to increase by one.*/
-        crlBuilder.addExtension(X509Extension.cRLNumber, false, new CRLNumber(new BigInteger("127")));
+        crlBuilder.addExtension(Extension.cRLNumber, false, new CRLNumber(new BigInteger("127")));
 
         for (int i = 0; i < 2000000; i++) {
             crlBuilder.addCRLEntry(new BigInteger(String.valueOf(i)), new Date(), CRLReason.unspecified);
